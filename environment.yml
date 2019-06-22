@@ -1,0 +1,16 @@
+name: gapped_text
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.7
+  - pip
+  - regex=2019.04.14
+  - numpy
+  - pandas
+  - pathos
+  - pytorch=1.1.0
+  - pip:
+    - spacy-nightly
+    - pytorch-pretrained-bert==0.6.2

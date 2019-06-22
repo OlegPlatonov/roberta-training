@@ -1,0 +1,10 @@
+.DS_Store
+.idea
+__pycache__
+.ipynb_checkpoints
+.texpadtmp
+/Notebooks/*
+/Data/Wikipedia/*
+/Data/GT/*
+
+!.gitkeep
