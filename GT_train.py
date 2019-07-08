@@ -103,7 +103,7 @@ def main():
     log.info('Args: {}'.format(dumps(vars(args), indent=4, sort_keys=True)))
     args.batch_size *= max(1, len(args.gpu_ids))
 
-    num_data_samples = get_num_data_samples(args.data_folder, args.num_epochs, log)
+    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_folder, args.num_epochs, log)
     num_optimization_steps = sum(num_data_samples) // args.batch_size // args.accumulation_steps
     log.info(f'Total number of optimization steps: {num_optimization_steps}')
 
@@ -165,7 +165,7 @@ def main():
     log.info('Training...')
     steps_till_eval = args.eval_steps
     for epoch in range(1, args.num_epochs + 1):
-        train_data_file_num = ((epoch - 1) % len(num_data_samples)) + 1
+        train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
         train_data_file = os.path.join(args.data_folder, f'Epoch_{train_data_file_num}.csv')
         log.info(f'Creating training dataset from {train_data_file}')
         train_dataset = GT_Dataset(train_data_file)
@@ -213,7 +213,7 @@ def main():
 
                     # Log info
                     current_lr = optimizer.get_lr()[0]
-                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr * 1e5)
+                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr)
                     tbx_writer.add_scalar('train/Loss', loss_val, global_step)
                     tbx_writer.add_scalar('train/LR', current_lr, global_step)
                     loss_val = 0

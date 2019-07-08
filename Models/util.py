@@ -185,8 +185,10 @@ def get_num_data_samples(data_folder, num_epochs, log=None):
         else:
             break
 
+    num_unique_data_epochs = len(num_data_samples)
+
     if log is not None:
-        log.info(f'{len(num_data_samples)} unique epochs of data found.')
+        log.info(f'{num_unique_data_epochs} unique epochs of data found.')
 
     for i in range(num_epochs - len(num_data_samples)):
         num_data_samples.append(num_data_samples[i])
@@ -194,7 +196,7 @@ def get_num_data_samples(data_folder, num_epochs, log=None):
     if log is not None:
         log.info(f'Number of samples per epoch: {num_data_samples}')
 
-    return num_data_samples
+    return num_data_samples, num_unique_data_epochs
 
 
 class AverageMeter:
