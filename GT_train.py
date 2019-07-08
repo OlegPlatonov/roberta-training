@@ -177,8 +177,10 @@ def main():
 
         log.info(f'Starting epoch {epoch}...')
         model.train()
+        optimizer.zero_grad()
+        loss_val = 0
         with torch.enable_grad(), tqdm(total=len(train_loader.dataset)) as progress_bar:
-            for batch in train_loader:
+            for step, batch in enumerate(train_loader, 1):
                 batch = tuple(x.to(device) for x in batch)
                 input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
                 current_batch_size = input_ids.shape[0]
@@ -193,47 +195,52 @@ def main():
                 if len(args.gpu_ids) > 1:
                     loss = loss.mean()
 
-                loss_val = loss.item()
+                if args.accumulation_steps > 1:
+                    loss = loss / args.accumulation_steps
+
+                loss_val += loss.item()
 
                 loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
-                global_step += 1
+
                 samples_processed += current_batch_size
-                current_lr = optimizer.get_lr()[0]
-
-                # Log info
-                progress_bar.update(current_batch_size)
-                progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr * 1e5)
-                tbx_writer.add_scalar('train/Loss', loss_val, global_step)
-                tbx_writer.add_scalar('train/LR', current_lr, global_step)
-
                 steps_till_eval -= current_batch_size
-                if steps_till_eval <= 0:
-                    steps_till_eval = args.eval_steps
-                    evaluate_and_save(model=model,
-                                      optimizer=optimizer,
-                                      data_loader=dev_loader,
-                                      device=device,
-                                      args=args,
-                                      tbx_writer=tbx_writer,
-                                      log=log,
-                                      global_step=global_step,
-                                      saver=saver)
+                progress_bar.update(current_batch_size)
+
+                if step % args.accumulation_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    global_step += 1
+
+                    # Log info
+                    current_lr = optimizer.get_lr()[0]
+                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr * 1e5)
+                    tbx_writer.add_scalar('train/Loss', loss_val, global_step)
+                    tbx_writer.add_scalar('train/LR', current_lr, global_step)
+                    loss_val = 0
+
+                    if steps_till_eval <= 0:
+                        steps_till_eval = args.eval_steps
+                        evaluate_and_save(model=model,
+                                          optimizer=optimizer,
+                                          data_loader=dev_loader,
+                                          device=device,
+                                          tbx_writer=tbx_writer,
+                                          log=log,
+                                          global_step=global_step,
+                                          saver=saver)
 
             if args.eval_after_epoch:
                 evaluate_and_save(model=model,
                                   optimizer=optimizer,
                                   data_loader=dev_loader,
                                   device=device,
-                                  args=args,
                                   tbx_writer=tbx_writer,
                                   log=log,
                                   global_step=global_step,
                                   saver=saver)
 
 
-def evaluate_and_save(model, optimizer, data_loader, device, args, tbx_writer, log, global_step, saver):
+def evaluate_and_save(model, optimizer, data_loader, device, tbx_writer, log, global_step, saver):
     log.info('Evaluating...')
     results = evaluate(model, data_loader, device)
     log.info('Saving checkpoint at step {}...'.format(global_step))
