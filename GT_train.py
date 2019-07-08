@@ -26,7 +26,7 @@ Adapted from https://github.com/chrischute/squad and https://github.com/huggingf
 """
 
 
-def main():
+def get_args():
     parser = ArgumentParser()
     parser.add_argument('--name',
                         type=str,
@@ -94,17 +94,18 @@ def main():
 
     args = parser.parse_args()
 
-    args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
+    return args
 
-    with open(os.path.join(args.save_dir, 'args.yaml'), 'w', encoding='utf8') as file:
-        yaml.dump(vars(args), file, default_flow_style=False, allow_unicode=True)
 
-    log = get_logger(args.save_dir, args.name)
+def main(args, log):
+    log.info('Args: {}'.format(dumps(vars(args), indent=4, sort_keys=True)))
+    with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
+        yaml.dump(vars(args), file)
+
     tbx_writer = SummaryWriter(args.save_dir)
     device = 'cpu' if args.gpu_ids == '' else 'cuda'
     args.gpu_ids = [int(idx) for idx in args.gpu_ids]
 
-    log.info('Args: {}'.format(dumps(vars(args), indent=4, sort_keys=True)))
     args.batch_size *= max(1, len(args.gpu_ids))
 
     num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_folder, args.num_epochs, log)
@@ -122,8 +123,8 @@ def main():
     log.info(f'Loading model {args.model}...')
     model = BertForGappedText.from_pretrained(args.model)
 
-    with open(os.path.join(args.save_dir, 'config.yaml'), 'w', encoding='utf8') as file:
-        yaml.dump(model.config, file, default_flow_style=False, allow_unicode=True)
+    with open(os.path.join(args.save_dir, 'config.yaml'), 'w') as file:
+        yaml.dump(model.config.__dict__, file)
 
     if args.fp16:
         log.info('Using 16-bit float precision.')
@@ -340,4 +341,11 @@ def evaluate(model, data_loader, device):
 
 
 if __name__ == '__main__':
-    main()
+    args = get_args()
+    args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
+    log = get_logger(args.save_dir, args.name)
+
+    try:
+        main(args, log)
+    except:
+        log.exception('An error occured...')
