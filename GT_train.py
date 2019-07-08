@@ -18,11 +18,11 @@ from Models.BERT import BertForGappedText
 from Models.Datasets import GT_Dataset, GT_collate_fn
 from Models.util import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
 
-from pytorch_pretrained_bert.optimization import BertAdam
+from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 
 
 """
-Adapted from https://github.com/chrischute/squad.
+Adapted from https://github.com/chrischute/squad and https://github.com/huggingface/pytorch-pretrained-BERT.
 """
 
 
@@ -56,6 +56,10 @@ def main():
     parser.add_argument('--accumulation_steps',
                         type=int,
                         default=1)
+    parser.add_argument('--fp16',
+                        type=lambda s: s.lower().startswith('t'),
+                        default=False,
+                        help='Whether to use 16-bit float precision instead of 32-bit')
     parser.add_argument('--num_epochs',
                         type=int,
                         default=1)
@@ -121,8 +125,16 @@ def main():
     with open(os.path.join(args.save_dir, 'config.yaml'), 'w', encoding='utf8') as file:
         yaml.dump(model.config, file, default_flow_style=False, allow_unicode=True)
 
+    if args.fp16:
+        log.info('Using 16-bit float precision.')
+        model.half()
+        model.output_layer.dtype = torch.float16
+
     if len(args.gpu_ids) > 1:
         model = nn.DataParallel(model, args.gpu_ids)
+
+    if device == 'cuda':
+        log.info(f'Using the following GPUs: {", ".join(map(str, args.gpu_ids))}.')
 
     model = model.to(device)
     model.train()
@@ -143,10 +155,21 @@ def main():
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
 
-    optimizer = BertAdam(optimizer_grouped_parameters,
-                         lr=args.learning_rate,
-                         warmup=args.warmup_proportion,
-                         t_total=num_optimization_steps)
+    if args.fp16:
+        from apex.optimizers import FP16_Optimizer
+        from apex.optimizers import FusedAdam
+        optimizer = FusedAdam(optimizer_grouped_parameters,
+                              lr=args.learning_rate,
+                              bias_correction=False,
+                              max_grad_norm=1.0)
+        optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
+        warmup_linear = WarmupLinearSchedule(warmup=args.warmup_proportion,
+                                             t_total=num_optimization_steps)
+    else:
+        optimizer = BertAdam(optimizer_grouped_parameters,
+                             lr=args.learning_rate,
+                             warmup=args.warmup_proportion,
+                             t_total=num_optimization_steps)
 
     global_step = 0
     samples_processed = 0
@@ -200,19 +223,29 @@ def main():
 
                 loss_val += loss.item()
 
-                loss.backward()
+                if args.fp16:
+                    optimizer.backward(loss)
+                else:
+                    loss.backward()
 
                 samples_processed += current_batch_size
                 steps_till_eval -= current_batch_size
                 progress_bar.update(current_batch_size)
 
                 if step % args.accumulation_steps == 0:
+                    if args.fp16:
+                        # modify learning rate with special warm up BERT uses
+                        # if args.fp16 is False, BertAdam is used that handles this automatically
+                        current_lr = args.learning_rate * warmup_linear.get_lr(global_step, args.warmup_proportion)
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = current_lr
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
 
                     # Log info
-                    current_lr = optimizer.get_lr()[0]
+                    if not args.fp16:
+                        current_lr = optimizer.get_lr()[0]
                     progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr)
                     tbx_writer.add_scalar('train/Loss', loss_val, global_step)
                     tbx_writer.add_scalar('train/LR', current_lr, global_step)

@@ -7,6 +7,7 @@ from pytorch_pretrained_bert.modeling import BertModel, BertPreTrainedModel
 class BertGTHead(nn.Module):
     def __init__(self, config, window_size=15):
         super(BertGTHead, self).__init__()
+        self.dtype = torch.float32
         self.window_size = window_size
 
         self.gap_features_2_scores = nn.Linear(3 * config.hidden_size, 1)
@@ -27,10 +28,10 @@ class BertGTHead(nn.Module):
         for gap_id in torch.split(gap_ids, split_size_or_sections=1, dim=1):
             window_mask = (index_seq >= (gap_id - self.window_size)) * (index_seq <= (gap_id + self.window_size))
             window_mask = window_mask.type(torch.int64) * (token_type_ids == 0).type(torch.int64) * word_mask
-            window = sequence_output * window_mask.unsqueeze(2).type(torch.float32)
+            window = sequence_output * window_mask.unsqueeze(2).type(self.dtype)
 
             current_max_pool, _ = torch.max(window, dim=1, keepdim=True)
-            num_tokens = torch.unsqueeze(torch.sum(window_mask, dim=1, keepdim=True), dim=2).type(torch.float32)
+            num_tokens = torch.unsqueeze(torch.sum(window_mask, dim=1, keepdim=True), dim=2).type(self.dtype)
             current_avg_pool = torch.sum(window, dim=1, keepdim=True) / num_tokens
 
             window_max_pool.append(current_max_pool)
@@ -41,10 +42,10 @@ class BertGTHead(nn.Module):
 
         # whole text pooling
         window_mask = (token_type_ids == 0).type(torch.int64) * word_mask
-        window = sequence_output * window_mask.unsqueeze(2).type(torch.float32)
+        window = sequence_output * window_mask.unsqueeze(2).type(self.dtype)
 
         text_max_pool, _ = torch.max(window, dim=1, keepdim=True)
-        num_tokens = torch.unsqueeze(torch.sum(window_mask, dim=1, keepdim=True), dim=2).type(torch.float32)
+        num_tokens = torch.unsqueeze(torch.sum(window_mask, dim=1, keepdim=True), dim=2).type(self.dtype)
         text_avg_pool = torch.sum(window, dim=1, keepdim=True) / num_tokens
 
         gap_features = torch.cat([gaps, window_max_pool, window_avg_pool], dim=-1)
