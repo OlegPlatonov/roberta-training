@@ -1,4 +1,4 @@
-name: gapped_text
+name: GT
 channels:
   - pytorch
   - conda-forge
@@ -9,8 +9,13 @@ dependencies:
   - regex=2019.04.14
   - numpy
   - pandas
+  - tqdm
+  - pyyaml
+  - yaml
   - pathos
   - pytorch=1.1.0
+  - tensorflow
+  - tensorboard
+  - tensorboardX
   - pip:
     - spacy-nightly
-    - pytorch-pretrained-bert==0.6.2
