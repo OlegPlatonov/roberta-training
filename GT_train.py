@@ -71,7 +71,13 @@ def get_args():
                         default=0.1,
                         type=float,
                         help='Proportion of training to perform linear learning rate warmup for. '
-                             'E.g., 0.1 = 10%% of training.')
+                             'E.g., 0.1 = 10% of training.')
+    parser.add_argument('--freeze_proportion',
+                        default=0,
+                        type=float,
+                        help='Proportion of training to freeze encoder for. '
+                             'E.g., 0.01 = 1% of training.'
+                             'Everything except for embedding layer and output layer will be frozen.')
     parser.add_argument('--num_workers',
                         type=int,
                         default=4,
@@ -187,6 +193,25 @@ def main(args, log):
 
     # Train
     log.info('Training...')
+
+    frozen = False
+    if args.freeze_proportion > 0:
+        freeze_steps = int(num_optimization_steps * args.freeze_proportion)
+        log.info(f'Freezing encoder for {freeze_steps} training steps. '
+                 'Everything except for embedding layer and output layer will be frozen.')
+        frozen = True
+
+        if hasattr(model, 'module'):
+            for param in model.module.bert.parameters():
+                param.requires_grad = False
+            for param in model.module.bert.embeddings.parameters():
+                param.requires_grad = True
+        else:
+            for param in model.bert.parameters():
+                param.requires_grad = False
+            for param in model.bert.embeddings.parameters():
+                param.requires_grad = True
+
     steps_till_eval = args.eval_steps
     for epoch in range(1, args.num_epochs + 1):
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
@@ -247,10 +272,20 @@ def main(args, log):
                     # Log info
                     if not args.fp16:
                         current_lr = optimizer.get_lr()[0]
-                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, lr=current_lr)
+                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, step=global_step, lr=current_lr)
                     tbx_writer.add_scalar('train/Loss', loss_val, global_step)
                     tbx_writer.add_scalar('train/LR', current_lr, global_step)
                     loss_val = 0
+
+                    if frozen and global_step >= freeze_steps:
+                        log.info(f'Unfreezing encoder at step {global_step}.')
+                        frozen = False
+                        if hasattr(model, 'module'):
+                            for param in model.module.bert.parameters():
+                                param.requires_grad = True
+                        else:
+                            for param in model.bert.parameters():
+                                param.requires_grad = True
 
                     if steps_till_eval <= 0:
                         steps_till_eval = args.eval_steps
@@ -326,7 +361,7 @@ def evaluate(model, data_loader, device):
 
             # Log info
             progress_bar.update(current_batch_size)
-            progress_bar.set_postfix(Loss=loss_meter.avg)
+            progress_bar.set_postfix(loss=loss_meter.avg)
 
     model.train()
 
