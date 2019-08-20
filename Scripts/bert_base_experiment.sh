@@ -1,1 +1,0 @@
-python GT_train.py --name bert_base_experiment --data_folder ./Data/GT --gpu_ids 0123 --batch_size 14 --num_epochs 1 --num_workers 8 --max_checkpoints 30 --eval_steps 250000 --eval_after_epoch True --learning_rate 0.00003 --warmup_proportion 0.1 --freeze_proportion 0.01 --accumulation_steps 10

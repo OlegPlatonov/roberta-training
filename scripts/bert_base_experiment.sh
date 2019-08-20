@@ -1,0 +1,13 @@
+python train_gt.py \
+  --name bert_base_experiment \
+  --data_dir ./data/GT \
+  --batch_size 14 \
+  --num_epochs 1 \
+  --num_workers 8 \
+  --max_checkpoints 10 \
+  --eval_steps 250000 \
+  --eval_after_epoch True \
+  --learning_rate 0.00003 \
+  --warmup_proportion 0.1 \
+  --freeze_proportion 0 \
+  --accumulation_steps 10

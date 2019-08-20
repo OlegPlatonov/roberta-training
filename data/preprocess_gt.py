@@ -20,7 +20,7 @@ args = parser.parse_args()
 nlp = spacy.load('en_core_web_sm', disable=['tagger', 'ner'])
 
 special_tokens = ['[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]', '[GAP]']
-tokenizer = BertTokenizer.from_pretrained('./../Models/Vocabs/bert-base-uncased-vocab.txt', never_split=special_tokens)
+tokenizer = BertTokenizer.from_pretrained('./../models/vocabs/bert-base-uncased-vocab.txt', never_split=special_tokens)
 
 
 def get_raw_texts(file):

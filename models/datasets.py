@@ -5,7 +5,7 @@ from pytorch_pretrained_bert import BertTokenizer
 
 
 special_tokens = ['[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]', '[GAP]']
-tokenizer = BertTokenizer.from_pretrained('./Models/Vocabs/bert-base-uncased-vocab.txt',
+tokenizer = BertTokenizer.from_pretrained('./models/vocabs/bert-base-uncased-vocab.txt',
                                           do_basic_tokenize=False,
                                           never_split=special_tokens)
 

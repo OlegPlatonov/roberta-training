@@ -3,8 +3,8 @@
 __pycache__
 .ipynb_checkpoints
 .texpadtmp
-/Notebooks/*
-/Data/Wikipedia/*
-/Data/GT/*
+/notebooks/*
+/data/Wikipedia/*
+/data/GT/*
 
 !.gitkeep

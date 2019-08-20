@@ -14,9 +14,9 @@ from collections import OrderedDict
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from Models.BERT import BertForGappedText
-from Models.Datasets import GT_Dataset, GT_collate_fn
-from Models.util import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
+from models.bert import BertForGappedText
+from models.datasets import GT_Dataset, GT_collate_fn
+from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
 
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 
@@ -38,11 +38,11 @@ def get_args():
                         help='Pretrained model name or path.')
     parser.add_argument('--save_dir',
                         type=str,
-                        default='./Experiments',
+                        default='./experiments',
                         help='Base directory for saving information.')
     parser.add_argument('--data_dir',
                         type=str,
-                        default='./Data/GT')
+                        default='./data/GT')
     parser.add_argument('--seed',
                         type=int,
                         default=111)
