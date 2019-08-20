@@ -11,7 +11,7 @@ from argparse import ArgumentParser
 from json import dumps
 from collections import OrderedDict
 
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from Models.BERT import BertForGappedText
@@ -40,22 +40,24 @@ def get_args():
                         type=str,
                         default='./Experiments',
                         help='Base directory for saving information.')
-    parser.add_argument('--data_folder',
+    parser.add_argument('--data_dir',
                         type=str,
                         default='./Data/GT')
-    parser.add_argument('--gpu_ids',
-                        type=str,
-                        default='')
     parser.add_argument('--seed',
                         type=int,
                         default=111)
     parser.add_argument('--batch_size',
                         type=int,
                         default=8,
-                        help='Batch size per GPU.')
+                        help='This is the number of training samples processed together by one GPU. '
+                             'The effective batch size (number of training samples processed per one '
+                             'optimization step) is equal to batch_size * num_gpus * accumulation_steps.')
     parser.add_argument('--accumulation_steps',
                         type=int,
                         default=1)
+    parser.add_argument('--no_cuda',
+                        type=lambda s: s.lower().startswith('t'),
+                        default=False)
     parser.add_argument('--fp16',
                         type=lambda s: s.lower().startswith('t'),
                         default=False,
@@ -108,15 +110,17 @@ def main(args, log):
     with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
         yaml.dump(vars(args), file)
 
-    tbx_writer = SummaryWriter(args.save_dir)
-    device = 'cpu' if args.gpu_ids == '' else 'cuda'
-    args.gpu_ids = [int(idx) for idx in args.gpu_ids]
+    tb_writer = SummaryWriter(args.save_dir)
+    device = 'cpu' if args.no_cuda else 'cuda'
+    num_gpus = 0 if args.no_cuda else torch.cuda.device_count()
+    log.info(f'Number of GPUs to use: {num_gpus}.')
+    log.info(f'Effective batch size: {args.batch_size * num_gpus * args.accumulation_steps}.')
 
-    args.batch_size *= max(1, len(args.gpu_ids))
+    args.batch_size *= max(1, num_gpus)
 
-    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_folder, args.num_epochs, log)
+    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, log)
     num_optimization_steps = sum(num_data_samples) // args.batch_size // args.accumulation_steps
-    log.info(f'Total number of optimization steps: {num_optimization_steps}')
+    log.info(f'Total number of optimization steps: {num_optimization_steps}.')
 
     # Set random seed
     log.info(f'Using random seed {args.seed}.')
@@ -137,11 +141,8 @@ def main(args, log):
         model.half()
         model.output_layer.dtype = torch.float16
 
-    if len(args.gpu_ids) > 1:
-        model = nn.DataParallel(model, args.gpu_ids)
-
-    if device == 'cuda':
-        log.info(f'Using the following GPUs: {", ".join(map(str, args.gpu_ids))}.')
+    if num_gpus > 1:
+        model = nn.DataParallel(model)
 
     model = model.to(device)
     model.train()
@@ -182,8 +183,8 @@ def main(args, log):
     samples_processed = 0
 
     # Get dev data loader
-    dev_data_file = os.path.join(args.data_folder, f'Dev.csv')
-    log.info(f'Creating dev dataset from {dev_data_file}')
+    dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
+    log.info(f'Creating dev dataset from {dev_data_file}...')
     dev_dataset = GT_Dataset(dev_data_file)
     dev_loader = data.DataLoader(dev_dataset,
                                  batch_size=args.batch_size,
@@ -215,8 +216,8 @@ def main(args, log):
     steps_till_eval = args.eval_steps
     for epoch in range(1, args.num_epochs + 1):
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
-        train_data_file = os.path.join(args.data_folder, f'Epoch_{train_data_file_num}.csv')
-        log.info(f'Creating training dataset from {train_data_file}')
+        train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
+        log.info(f'Creating training dataset from {train_data_file}...')
         train_dataset = GT_Dataset(train_data_file)
         train_loader = data.DataLoader(train_dataset,
                                        batch_size=args.batch_size,
@@ -241,7 +242,7 @@ def main(args, log):
                              gap_ids=gap_ids,
                              target_gaps=target_gaps)
 
-                if len(args.gpu_ids) > 1:
+                if num_gpus > 1:
                     loss = loss.mean()
 
                 if args.accumulation_steps > 1:
@@ -273,8 +274,8 @@ def main(args, log):
                     if not args.fp16:
                         current_lr = optimizer.get_lr()[0]
                     progress_bar.set_postfix(epoch=epoch, loss=loss_val, step=global_step, lr=current_lr)
-                    tbx_writer.add_scalar('train/Loss', loss_val, global_step)
-                    tbx_writer.add_scalar('train/LR', current_lr, global_step)
+                    tb_writer.add_scalar('train/Loss', loss_val, global_step)
+                    tb_writer.add_scalar('train/LR', current_lr, global_step)
                     loss_val = 0
 
                     if frozen and global_step >= freeze_steps:
@@ -293,7 +294,7 @@ def main(args, log):
                                           optimizer=optimizer,
                                           data_loader=dev_loader,
                                           device=device,
-                                          tbx_writer=tbx_writer,
+                                          tb_writer=tb_writer,
                                           log=log,
                                           global_step=global_step,
                                           saver=saver)
@@ -303,13 +304,13 @@ def main(args, log):
                                   optimizer=optimizer,
                                   data_loader=dev_loader,
                                   device=device,
-                                  tbx_writer=tbx_writer,
+                                  tb_writer=tb_writer,
                                   log=log,
                                   global_step=global_step,
                                   saver=saver)
 
 
-def evaluate_and_save(model, optimizer, data_loader, device, tbx_writer, log, global_step, saver):
+def evaluate_and_save(model, optimizer, data_loader, device, tb_writer, log, global_step, saver):
     log.info('Evaluating...')
     results = evaluate(model, data_loader, device)
     log.info('Saving checkpoint at step {}...'.format(global_step))
@@ -326,7 +327,7 @@ def evaluate_and_save(model, optimizer, data_loader, device, tbx_writer, log, gl
     # Log to TensorBoard
     log.info('Visualizing in TensorBoard...')
     for k, v in results.items():
-        tbx_writer.add_scalar('dev/{}'.format(k), v, global_step)
+        tb_writer.add_scalar('dev/{}'.format(k), v, global_step)
 
 
 def evaluate(model, data_loader, device):
