@@ -13,7 +13,9 @@ dependencies:
   - pyyaml
   - yaml
   - pathos
-  - pytorch=1.2.0
+  - pytorch=1.1.0
+  - tensorflow
   - tensorboard
+  - tensorboardX
   - pip:
     - spacy-nightly

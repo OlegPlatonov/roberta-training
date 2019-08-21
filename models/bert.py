@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_pretrained_bert.modeling import BertModel, BertPreTrainedModel
+from pytorch_transformers.modeling_bert import BertModel, BertPreTrainedModel
 
 
 class BertGTHead(nn.Module):
@@ -59,16 +59,14 @@ class BertGTHead(nn.Module):
 
 
 class BertForGappedText(BertPreTrainedModel):
-    """BERT model with the masked language modeling head.
+    """BERT model with the head for Gapped Text task (with window pooling).
     This module comprises the BERT model followed by the masked language modeling head.
-
     Params:
         `config`: a BertConfig class instance with the configuration to build a new model
         `output_attentions`: If True, also output attentions weights computed by the model at each layer. Default: False
         `keep_multihead_output`: If True, saves output of the multi-head attention module with its gradient.
             This can be used to compute head importance metrics. Default: False
         'window_size': window size for window pooling. Default: 15
-
     Inputs:
         `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length]
             with the word token indices in the vocabulary(see the tokens preprocessing logic in the scripts
@@ -87,52 +85,48 @@ class BertForGappedText(BertPreTrainedModel):
             for classification. 0 means that fragment is not from any of the gaps.
         `head_mask`: an optional torch.Tensor of shape [num_heads] or [num_layers, num_heads] with indices between 0 and 1.
             It's a mask to be used to nullify some heads of the transformer. 1.0 => head is fully masked, 0.0 => head is not masked.
-
     Outputs:
         if `masked_lm_labels` is  not `None`:
             Outputs the masked language modeling loss.
         if `masked_lm_labels` is `None`:
             Outputs the masked language modeling logits of shape [batch_size, sequence_length, vocab_size].
-
     Example usage:
     ```python
     # Already been converted into WordPiece token ids
     input_ids = torch.LongTensor([[31, 51, 99], [15, 5, 0]])
     input_mask = torch.LongTensor([[1, 1, 1], [1, 1, 0]])
     token_type_ids = torch.LongTensor([[0, 0, 1], [0, 1, 0]])
-
     config = BertConfig(vocab_size_or_config_json_file=32000, hidden_size=768,
         num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072)
-
     model = BertForMaskedLM(config)
     masked_lm_logits_scores = model(input_ids, token_type_ids, input_mask)
     ```
     """
-    def __init__(self, config, output_attentions=False, keep_multihead_output=False, window_size=15):
+    def __init__(self, config, window_size=15):
         super(BertForGappedText, self).__init__(config)
-        self.output_attentions = output_attentions
-        self.bert = BertModel(config, output_attentions=output_attentions,
-                                      keep_multihead_output=keep_multihead_output)
+        self.bert = BertModel(config)
         self.output_layer = BertGTHead(config, window_size=window_size)
-        self.apply(self.init_bert_weights)
+        self.apply(self.init_weights)
 
-    def forward(self, input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps, head_mask=None):
-        outputs = self.bert(input_ids, token_type_ids, attention_mask,
-                                       output_all_encoded_layers=False,
-                                       head_mask=head_mask)
-        if self.output_attentions:
-            all_attentions, sequence_output, pooled_output = outputs
-        else:
-            sequence_output, pooled_output = outputs
+    def forward(self, input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps=None, position_ids=None, head_mask=None):
+        outputs = self.bert(input_ids=input_ids,
+                            token_type_ids=token_type_ids,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            head_mask=head_mask)
+
+        sequence_output, pooled_output = outputs[:2]
+
         gap_scores = self.output_layer(sequence_output=sequence_output,
                                        pooled_output=pooled_output,
                                        token_type_ids=token_type_ids,
                                        word_mask=word_mask,
                                        gap_ids=gap_ids)
 
+        outputs = (gap_scores,) + outputs[2:]
+
         if target_gaps is not None:
             loss = F.cross_entropy(input=gap_scores, target=target_gaps)
-            return loss
-        elif self.output_attentions:
-            return all_attentions, gap_scores
-        return gap_scores
+            outputs = (loss,) + outputs
+
+        return outputs

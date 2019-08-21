@@ -8,7 +8,7 @@ import string
 import argparse
 from pathos.multiprocessing import Pool
 from functools import partial
-from pytorch_pretrained_bert import BertTokenizer
+from pytorch_transformers import BertTokenizer
 
 
 parser = argparse.ArgumentParser()
@@ -19,8 +19,9 @@ args = parser.parse_args()
 
 nlp = spacy.load('en_core_web_sm', disable=['tagger', 'ner'])
 
-special_tokens = ['[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]', '[GAP]']
-tokenizer = BertTokenizer.from_pretrained('./../models/vocabs/bert-base-uncased-vocab.txt', never_split=special_tokens)
+tokenizer = BertTokenizer('./../models/vocabs/bert-base-uncased-vocab.txt',
+                          additional_special_tokens=['[GAP]'],
+                          do_basic_tokenize=True)
 
 
 def get_raw_texts(file):

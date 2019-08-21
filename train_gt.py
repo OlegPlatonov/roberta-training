@@ -2,7 +2,6 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.utils.data as data
 
 import os
@@ -11,14 +10,13 @@ from argparse import ArgumentParser
 from json import dumps
 from collections import OrderedDict
 
-from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 from models.bert import BertForGappedText
-from models.datasets import GT_Dataset, GT_collate_fn
+from models.optimizer import BertAdam, WarmupLinearSchedule
+from utils.datasets_gt import GT_Dataset, GT_collate_fn
 from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
-
-from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 
 
 """
@@ -95,10 +93,6 @@ def get_args():
                         type=lambda s: s.lower().startswith('t'),
                         default=True,
                         help='Whether to evaluate model at the end of every epoch.')
-    parser.add_argument('--maximize_metric',
-                        type=lambda s: s.lower().startswith('t'),
-                        default=True,
-                        help='Whether metric should be maximized or minimized.')
 
     args = parser.parse_args()
 
@@ -151,7 +145,7 @@ def main(args, log):
     saver = CheckpointSaver(args.save_dir,
                             max_checkpoints=args.max_checkpoints,
                             metric_name='Accuracy',
-                            maximize_metric=args.maximize_metric,
+                            maximize_metric=True,
                             log=log)
 
     # Get optimizer
@@ -235,12 +229,14 @@ def main(args, log):
                 input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
                 current_batch_size = input_ids.shape[0]
 
-                loss = model(input_ids=input_ids,
-                             token_type_ids=token_type_ids,
-                             attention_mask=attention_mask,
-                             word_mask=word_mask,
-                             gap_ids=gap_ids,
-                             target_gaps=target_gaps)
+                outputs = model(input_ids=input_ids,
+                                token_type_ids=token_type_ids,
+                                attention_mask=attention_mask,
+                                word_mask=word_mask,
+                                gap_ids=gap_ids,
+                                target_gaps=target_gaps)
+
+                loss = outputs[0]
 
                 if num_gpus > 1:
                     loss = loss.mean()
@@ -344,14 +340,14 @@ def evaluate(model, data_loader, device):
             input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
             current_batch_size = input_ids.shape[0]
 
-            gap_scores = model(input_ids=input_ids,
-                               token_type_ids=token_type_ids,
-                               attention_mask=attention_mask,
-                               word_mask=word_mask,
-                               gap_ids=gap_ids,
-                               target_gaps=None)
+            outputs = model(input_ids=input_ids,
+                            token_type_ids=token_type_ids,
+                            attention_mask=attention_mask,
+                            word_mask=word_mask,
+                            gap_ids=gap_ids,
+                            target_gaps=target_gaps)
 
-            loss = F.cross_entropy(input=gap_scores, target=target_gaps)
+            loss, gap_scores = outputs[:2]
             loss_meter.update(loss.item(), current_batch_size)
 
             preds = torch.argmax(gap_scores, dim=1)

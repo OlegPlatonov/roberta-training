@@ -1,13 +1,12 @@
 import pandas as pd
 import torch
 import torch.utils.data as data
-from pytorch_pretrained_bert import BertTokenizer
+from pytorch_transformers import BertTokenizer
 
 
-special_tokens = ['[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]', '[GAP]']
-tokenizer = BertTokenizer.from_pretrained('./models/vocabs/bert-base-uncased-vocab.txt',
-                                          do_basic_tokenize=False,
-                                          never_split=special_tokens)
+tokenizer = BertTokenizer('./models/vocabs/bert-base-uncased-vocab.txt',
+                          additional_special_tokens=['[GAP]'],
+                          do_basic_tokenize=False)
 
 GAP_TOKEN_ID = tokenizer.vocab['[GAP]']
 
