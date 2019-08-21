@@ -7,7 +7,7 @@ import shutil
 import yaml
 
 
-def get_logger(log_dir, name):
+def get_logger(log_dir, name, verbose=True, log_file='log.txt'):
     """Get a `logging.Logger` instance that prints to the console
     and an auxiliary file.
 
@@ -18,7 +18,7 @@ def get_logger(log_dir, name):
     Returns:
         logger (logging.Logger): Logger instance for logging events.
 
-    Taken from https://github.com/chrischute/squad.
+    Adapted from https://github.com/chrischute/squad.
     """
     class StreamHandlerWithTQDM(logging.Handler):
         """Let `logging` print without breaking `tqdm` progress bars.
@@ -40,14 +40,25 @@ def get_logger(log_dir, name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
-    # Log everything (i.e., DEBUG level and above) to a file
-    log_path = os.path.join(log_dir, 'log.txt')
-    file_handler = logging.FileHandler(log_path)
-    file_handler.setLevel(logging.DEBUG)
+    if verbose:
+        # Log everything (i.e., DEBUG level and above) to a file
+        log_path = os.path.join(log_dir, log_file)
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(logging.DEBUG)
 
-    # Log everything except DEBUG level (i.e., INFO level and above) to console
-    console_handler = StreamHandlerWithTQDM()
-    console_handler.setLevel(logging.INFO)
+        # Log everything except DEBUG level (i.e., INFO level and above) to console
+        console_handler = StreamHandlerWithTQDM()
+        console_handler.setLevel(logging.INFO)
+
+    else:
+        # Log INFO level and above to a file
+        log_path = os.path.join(log_dir, log_file)
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(logging.INFO)
+
+        # Log WARN level and above to console
+        console_handler = StreamHandlerWithTQDM()
+        console_handler.setLevel(logging.WARN)
 
     # Create format for the logs
     file_formatter = logging.Formatter('[%(asctime)s] %(message)s',
@@ -226,7 +237,7 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def get_save_dir(base_dir, name, training, id_max=100):
+def get_save_dir(base_dir, name, training, id_max=100, use_existing_dir=False):
     """Get a unique save directory by appending the smallest positive integer
     `id < id_max` that is not already taken (i.e., no dir exists with that id).
 
@@ -239,14 +250,18 @@ def get_save_dir(base_dir, name, training, id_max=100):
     Returns:
         save_dir (str): Path to a new directory with a unique name.
 
-    Taken from https://github.com/chrischute/squad.
+    Adapted from https://github.com/chrischute/squad.
     """
     for uid in range(1, id_max):
         subdir = 'train' if training else 'test'
         save_dir = os.path.join(base_dir, subdir, '{}-{:02d}'.format(name, uid))
         if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-            return save_dir
+            if not use_existing_dir:
+                os.makedirs(save_dir)
+                return save_dir
+            else:
+                save_dir = os.path.join(base_dir, subdir, '{}-{:02d}'.format(name, uid - 1))
+                return save_dir
 
     raise RuntimeError('Too many save directories created with the same name. \
                        Delete old save directories or use another name.')
