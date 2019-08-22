@@ -1,13 +1,14 @@
 import random
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.utils.data as data
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel
 
 import os
+import json
 import yaml
 from argparse import ArgumentParser
-from json import dumps
 from collections import OrderedDict
 
 from tensorboardX import SummaryWriter
@@ -17,10 +18,6 @@ from models.bert import BertForGappedText
 from models.optimizer import BertAdam
 from utils.datasets_gt import GT_Dataset, GT_collate_fn
 from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
-
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel
-
 
 
 """
@@ -47,7 +44,7 @@ def get_args():
                         default='./data/GT')
     parser.add_argument('--seed',
                         type=int,
-                        default=111)
+                        default=12)
     parser.add_argument('--batch_size',
                         type=int,
                         default=8,
@@ -76,7 +73,7 @@ def get_args():
     parser.add_argument('--max_checkpoints',
                         type=int,
                         default=30)
-    parser.add_argument('--eval_steps',
+    parser.add_argument('--eval_every',
                         type=int,
                         default=50000,
                         help='Evaluate model after processing this many training samples.')
@@ -94,8 +91,8 @@ def get_args():
     return args
 
 
-def main(args, log):
-    log.info('Args: {}'.format(dumps(vars(args), indent=4, sort_keys=True)))
+def train(args, log):
+    log.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     if args.local_rank == 0:
         with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
             yaml.dump(vars(args), file)
@@ -108,7 +105,10 @@ def main(args, log):
     world_size = torch.distributed.get_world_size()
     log.info(f'Total number of GPUs used: {world_size}.')
     log.info(f'Effective batch size: {args.batch_size * world_size * args.accumulation_steps}.')
-    args.eval_steps = args.eval_steps // world_size
+
+    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, log)
+    num_optimization_steps = sum(num_data_samples) // world_size // args.batch_size // args.accumulation_steps
+    log.info(f'Total number of optimization steps: {num_optimization_steps}.')
 
     # Set random seed
     log.info(f'Using random seed {args.seed}.')
@@ -125,9 +125,10 @@ def main(args, log):
     model = BertForGappedText.from_pretrained(args.model)
 
     if args.local_rank == 0:
+        with open(os.path.join(args.save_dir, 'config.json'), 'w') as file:
+            json.dump(model.config.__dict__, file)
+
         torch.distributed.barrier()
-        with open(os.path.join(args.save_dir, 'config.yaml'), 'w') as file:
-            yaml.dump(model.config.__dict__, file)
 
     model.to(device)
 
@@ -138,32 +139,8 @@ def main(args, log):
                             maximize_metric=True,
                             log=log)
 
-    # Get train data loader
-    train_data_file = os.path.join(args.data_dir, f'Epoch_1.csv')
-    log.info(f'Creating training dataset from {train_data_file}...')
-    train_dataset = GT_Dataset(train_data_file)
-    train_sampler = DistributedSampler(train_dataset)
-    train_loader = data.DataLoader(train_dataset,
-                                   batch_size=args.batch_size,
-                                   sampler=train_sampler,
-                                   num_workers=args.num_workers,
-                                   collate_fn=GT_collate_fn)
-
-    # Get dev data loader
-    dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
-    log.info(f'Creating dev dataset from {dev_data_file}...')
-    dev_dataset = GT_Dataset(dev_data_file)
-    dev_sampler = DistributedSampler(dev_dataset)
-    dev_loader = data.DataLoader(dev_dataset,
-                                 batch_size=args.batch_size,
-                                 sampler=dev_sampler,
-                                 num_workers=2,
-                                 collate_fn=GT_collate_fn)
-
-    num_optimization_steps = len(train_loader) // args.accumulation_steps * args.num_epochs
-    log.info(f'Total number of optimization steps: {num_optimization_steps}.')
-
     # Get optimizer
+    log.info('Creating optimizer...')
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -177,6 +154,17 @@ def main(args, log):
                          warmup=args.warmup_proportion,
                          t_total=num_optimization_steps)
 
+    # Get dev data loader
+    dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
+    log.info(f'Creating dev dataset from {dev_data_file}...')
+    dev_dataset = GT_Dataset(dev_data_file)
+    dev_sampler = DistributedSampler(dev_dataset)
+    dev_loader = data.DataLoader(dev_dataset,
+                                 batch_size=args.batch_size,
+                                 sampler=dev_sampler,
+                                 num_workers=1,
+                                 collate_fn=GT_collate_fn)
+
     model = DistributedDataParallel(model,
                                     device_ids=[args.local_rank],
                                     output_device=args.local_rank)
@@ -186,14 +174,28 @@ def main(args, log):
 
     # Train
     log.info('Training...')
-    steps_till_eval = args.eval_steps
+    samples_till_eval = args.eval_every
     for epoch in range(1, args.num_epochs + 1):
+        torch.distributed.barrier()
+
+        # Get train data loader for current epoch
+        train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
+        train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
+        log.info(f'Creating training dataset from {train_data_file}...')
+        train_dataset = GT_Dataset(train_data_file)
+        train_sampler = DistributedSampler(train_dataset)
+        train_loader = data.DataLoader(train_dataset,
+                                       batch_size=args.batch_size,
+                                       sampler=train_sampler,
+                                       num_workers=args.num_workers,
+                                       collate_fn=GT_collate_fn)
+
         torch.distributed.barrier()
         log.info(f'Starting epoch {epoch}...')
         model.train()
         optimizer.zero_grad()
         loss_val = 0
-        with torch.enable_grad(), tqdm(total=len(train_loader) * args.batch_size, disable=args.local_rank != 0) as progress_bar:
+        with torch.enable_grad(), tqdm(total=len(train_loader.dataset), disable=args.local_rank != 0) as progress_bar:
             for step, batch in enumerate(train_loader, 1):
                 batch = tuple(x.to(device) for x in batch)
                 input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
@@ -215,9 +217,9 @@ def main(args, log):
 
                 loss.backward()
 
-                samples_processed += current_batch_size
-                steps_till_eval -= current_batch_size
-                progress_bar.update(current_batch_size)
+                samples_processed += current_batch_size * world_size
+                samples_till_eval -= current_batch_size * world_size
+                progress_bar.update(current_batch_size * world_size)
 
                 if step % args.accumulation_steps == 0:
                     optimizer.step()
@@ -232,8 +234,8 @@ def main(args, log):
                         tb_writer.add_scalar('train/LR', current_lr, global_step)
                     loss_val = 0
 
-                    if steps_till_eval <= 0:
-                        steps_till_eval = args.eval_steps
+                    if samples_till_eval <= 0:
+                        samples_till_eval = args.eval_every
                         evaluate_and_save(model=model,
                                           optimizer=optimizer,
                                           data_loader=dev_loader,
@@ -278,13 +280,14 @@ def evaluate_and_save(model, optimizer, data_loader, device, tb_writer, log, glo
 
 def evaluate(model, data_loader, device):
     loss_meter = AverageMeter()
+    world_size = torch.distributed.get_world_size()
 
     model.eval()
     correct_preds = 0
     correct_avna = 0
     zero_preds = 0
     total_preds = 0
-    with torch.no_grad(), tqdm(total=len(data_loader) * args.batch_size, disable=args.local_rank != 0) as progress_bar:
+    with torch.no_grad(), tqdm(total=len(data_loader.dataset), disable=args.local_rank != 0) as progress_bar:
         for batch in data_loader:
             batch = tuple(x.to(device) for x in batch)
             input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
@@ -307,7 +310,7 @@ def evaluate(model, data_loader, device):
             total_preds += current_batch_size
 
             # Log info
-            progress_bar.update(current_batch_size)
+            progress_bar.update(current_batch_size * world_size)
             progress_bar.set_postfix(loss=loss_meter.avg)
 
     model.train()
@@ -331,7 +334,7 @@ if __name__ == '__main__':
     if args.local_rank == 0:
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
         log = get_logger(args.save_dir, args.name, log_file=f'log_0.txt')
-        log.info(f'Results will be saved in {args.save_dir}.')
+        log.info(f'Results will be saved to {args.save_dir}.')
     else:
         torch.distributed.barrier()
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True, use_existing_dir=True)
@@ -341,6 +344,6 @@ if __name__ == '__main__':
         torch.distributed.barrier()
 
     try:
-        main(args, log)
+        train(args, log)
     except:
         log.exception('An error occured...')

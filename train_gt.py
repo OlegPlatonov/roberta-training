@@ -1,13 +1,13 @@
 import random
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.utils.data as data
+from torch.nn import DataParallel
 
 import os
+import json
 import yaml
 from argparse import ArgumentParser
-from json import dumps
 from collections import OrderedDict
 
 from tensorboardX import SummaryWriter
@@ -43,7 +43,7 @@ def get_args():
                         default='./data/GT')
     parser.add_argument('--seed',
                         type=int,
-                        default=111)
+                        default=12)
     parser.add_argument('--batch_size',
                         type=int,
                         default=8,
@@ -85,7 +85,7 @@ def get_args():
     parser.add_argument('--max_checkpoints',
                         type=int,
                         default=30)
-    parser.add_argument('--eval_steps',
+    parser.add_argument('--eval_every',
                         type=int,
                         default=50000,
                         help='Evaluate model after processing this many training samples.')
@@ -99,8 +99,8 @@ def get_args():
     return args
 
 
-def main(args, log):
-    log.info('Args: {}'.format(dumps(vars(args), indent=4, sort_keys=True)))
+def train(args, log):
+    log.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
         yaml.dump(vars(args), file)
 
@@ -127,8 +127,8 @@ def main(args, log):
     log.info(f'Loading model {args.model}...')
     model = BertForGappedText.from_pretrained(args.model)
 
-    with open(os.path.join(args.save_dir, 'config.yaml'), 'w') as file:
-        yaml.dump(model.config.__dict__, file)
+    with open(os.path.join(args.save_dir, 'config.json'), 'w') as file:
+        json.dump(model.config.__dict__, file)
 
     if args.fp16:
         log.info('Using 16-bit float precision.')
@@ -136,7 +136,7 @@ def main(args, log):
         model.output_layer.dtype = torch.float16
 
     if num_gpus > 1:
-        model = nn.DataParallel(model)
+        model = DataParallel(model)
 
     model = model.to(device)
     model.train()
@@ -149,6 +149,7 @@ def main(args, log):
                             log=log)
 
     # Get optimizer
+    log.info('Creating optimizer...')
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -207,8 +208,9 @@ def main(args, log):
             for param in model.bert.embeddings.parameters():
                 param.requires_grad = True
 
-    steps_till_eval = args.eval_steps
+    samples_till_eval = args.eval_every
     for epoch in range(1, args.num_epochs + 1):
+        # Get train data loader for current epoch
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
         train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
         log.info(f'Creating training dataset from {train_data_file}...')
@@ -252,7 +254,7 @@ def main(args, log):
                     loss.backward()
 
                 samples_processed += current_batch_size
-                steps_till_eval -= current_batch_size
+                samples_till_eval -= current_batch_size
                 progress_bar.update(current_batch_size)
 
                 if step % args.accumulation_steps == 0:
@@ -284,8 +286,8 @@ def main(args, log):
                             for param in model.bert.parameters():
                                 param.requires_grad = True
 
-                    if steps_till_eval <= 0:
-                        steps_till_eval = args.eval_steps
+                    if samples_till_eval <= 0:
+                        samples_till_eval = args.eval_every
                         evaluate_and_save(model=model,
                                           optimizer=optimizer,
                                           data_loader=dev_loader,
@@ -376,8 +378,9 @@ if __name__ == '__main__':
     args = get_args()
     args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
     log = get_logger(args.save_dir, args.name)
+    log.info(f'Results will be saved to {args.save_dir}.')
 
     try:
-        main(args, log)
+        train(args, log)
     except:
         log.exception('An error occured...')
