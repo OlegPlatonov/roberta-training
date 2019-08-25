@@ -8,20 +8,58 @@ import string
 import argparse
 from pathos.multiprocessing import Pool
 from functools import partial
-from pytorch_transformers import BertTokenizer
+from pytorch_transformers import BertTokenizer, RobertaTokenizer
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--num_workers', type=int, default=4, help='Number of sub-processes to use for data processing.')
-parser.add_argument('--seed', type=int, default=111, help='Random seed for reproducibility.')
+parser.add_argument('--model_type',
+                    default='bert-base-uncased',
+                    choices=['bert-base-uncased', 'roberta'],
+                    help='Number of sub-processes to use for data processing.')
+parser.add_argument('--num_workers',
+                    type=int,
+                    default=4,
+                    help='Number of sub-processes to use for data processing.')
+parser.add_argument('--data_dir',
+                    type=str,
+                    default='./Wikipedia/Extracted')
+parser.add_argument('--save_dir',
+                    type=str,
+                    default='./GT/Text')
+parser.add_argument('--seed',
+                    type=int,
+                    default=111,
+                    help='Random seed for reproducibility.')
 args = parser.parse_args()
 
 
 nlp = spacy.load('en_core_web_sm', disable=['tagger', 'ner'])
 
-tokenizer = BertTokenizer('./../models/vocabs/bert-base-uncased-vocab.txt',
-                          additional_special_tokens=['[GAP]'],
-                          do_basic_tokenize=True)
+if args.model_type == 'bert-base-uncased':
+    tokenizer = BertTokenizer('./../models/vocabs/bert-base-uncased-vocab.txt',
+                              additional_special_tokens=['[GAP]'],
+                              do_basic_tokenize=True)
+    GAP_TOKEN = '[GAP]'
+    UNK_TOKEN = '[UNK]'
+    MAX_PAIR_LENGTH = 509
+    LOWER = True
+
+elif args.model_type == 'roberta':
+    tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+    tokenizer.add_tokens(['<gap>'])
+    GAP_TOKEN = '<gap>'
+    UNK_TOKEN = '<unk>'
+    MAX_PAIR_LENGTH = 508
+    LOWER = False
+
+
+split_tokens_1 = set(['.', '?', '!', ',', ':', ';',
+                      'that', 'which', 'who', 'whom', 'whose', 'when', 'where',
+                      'of', 'for', 'from', 'was', 'is', 'are', 'were', 'and', 'or',
+                      'but', 'if', 'whether', 'while', 'because', 'though', 'as', 'to'])
+
+split_tokens_2 = set(['what', 'instead', 'have', 'has', 'had', 'will', 'there',
+                      'those', 'this', 'these', 'then', 'so', 'such', 'by'])
 
 
 def get_raw_texts(file):
@@ -29,7 +67,9 @@ def get_raw_texts(file):
 
     with open(file, encoding='utf8') as file:
         for line in file.readlines():
-            line = line.strip().lower()
+            line = line.strip()
+            if LOWER:
+                line = line.lower()
             if line.startswith('<doc'):   # begin new document
                 current_text = []
                 skip_next = True
@@ -67,8 +107,8 @@ def process_raw_line(line):
 
 
 def process_all(num_workers,
-                load_path='./Wikipedia/Extracted',
-                save_path='./GT/Text',
+                load_path=args.data_dir,
+                save_path=args.save_dir,
                 text_size=20,
                 num_gaps=5,
                 min_space=2,
@@ -164,7 +204,7 @@ def process_file(file, folder, save_path, chunk_size, num_gaps, min_space, num_r
     data.to_csv(os.path.join(save_path, f'{folder}_{file}.csv'), index=False)
 
 
-def process_text(text, chunk_size, num_gaps, min_space, num_random_sent, max_pair_len=509):
+def process_text(text, chunk_size, num_gaps, min_space, num_random_sent, max_pair_len=MAX_PAIR_LENGTH):
     chunk_bounds = list(range(0, len(text), chunk_size))
     for i in range(1, len(chunk_bounds)):
         chunk = text[chunk_bounds[i - 1]:chunk_bounds[i]]
@@ -177,7 +217,7 @@ def process_text(text, chunk_size, num_gaps, min_space, num_random_sent, max_pai
         gapped_chunk = [phrase for phrase in chunk]
         for idx in gap_sent_ids:
             fragments.append(chunk[idx])
-            gapped_chunk[idx] = '[GAP]'
+            gapped_chunk[idx] = GAP_TOKEN
 
         if max_pair_len is not None:
             text_length = len(' '.join(gapped_chunk).split())
@@ -190,7 +230,7 @@ def process_text(text, chunk_size, num_gaps, min_space, num_random_sent, max_pai
                     gapped_chunk = [phrase for phrase in chunk[:-x]]
                     for idx in gap_sent_ids:
                         fragments.append(chunk[idx])
-                        gapped_chunk[idx] = '[GAP]'
+                        gapped_chunk[idx] = GAP_TOKEN
                     text_length = len(' '.join(gapped_chunk).split())
                     fragment_lengths = [len(fragment.split()) for fragment in fragments]
                     if text_length + max(fragment_lengths) <= max_pair_len:
@@ -232,14 +272,6 @@ def process_text(text, chunk_size, num_gaps, min_space, num_random_sent, max_pai
 
 
 def get_all_split_idx(sent):
-    split_tokens_1 = set(['.', '?', '!', ',', ':', ';',
-                          'that', 'which', 'who', 'whom', 'whose', 'when', 'where',
-                          'of', 'for', 'from', 'was', 'is', 'are', 'were', 'and', 'or',
-                          'but', 'if', 'whether', 'while', 'because', 'though', 'as', 'to'])
-
-    split_tokens_2 = set(['what', 'instead', 'have', 'has', 'had', 'will', 'there',
-                          'those', 'this', 'these', 'then', 'so', 'such', 'by'])
-
     split_idx = [0]
     for i, token in enumerate(sent):
         if token.text in split_tokens_1 and split_idx[-1] != i + 1:
@@ -350,7 +382,7 @@ def get_random_nonchunk_sent_ids(text_len, chunk_size, chunk_start, num_random_s
 
 def phrase_is_unk(phrase):
     for token in phrase:
-        if token != '[UNK]' and token not in string.punctuation:
+        if token != UNK_TOKEN and token not in string.punctuation:
             return False
 
     return True
