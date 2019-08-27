@@ -13,7 +13,7 @@ from collections import OrderedDict
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
-from models.bert import BertForGappedText
+from models.bert import BertForGappedText, RobertaForGappedText
 from models.optimizer import BertAdam, WarmupLinearSchedule
 from utils.datasets_gt import GT_Dataset, GT_collate_fn
 from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
@@ -30,6 +30,10 @@ def get_args():
                         type=str,
                         required=True,
                         help='Experiment name.')
+    parser.add_argument('--model_type',
+                        default='bert-base-uncased',
+                        choices=['bert-base-uncased', 'roberta'],
+                        help='Model architecture.')
     parser.add_argument('--model',
                         type=str,
                         default='bert-base-uncased',
@@ -124,11 +128,20 @@ def train(args, log):
     torch.cuda.manual_seed_all(args.seed)
 
     # Get model
+    log.info(f'Using architecture {args.model_type}.')
     log.info(f'Loading model {args.model}...')
-    model = BertForGappedText.from_pretrained(args.model)
+    if args.model_type == 'bert-base-uncased':
+        model = BertForGappedText.from_pretrained(args.model)
+    elif args.model_type == 'roberta':
+        model = RobertaForGappedText(args.model)
+    else:
+        raise ValueError(f'Model architecture {args.model_type} is not found.')
 
     with open(os.path.join(args.save_dir, 'config.json'), 'w') as file:
-        json.dump(model.config.__dict__, file)
+        if hasattr(model.config, '__dict__'):
+            json.dump(model.config.__dict__, file)
+        else:
+            json.dump(model.config, file)
 
     if args.fp16:
         log.info('Using 16-bit float precision.')
@@ -151,11 +164,20 @@ def train(args, log):
     # Get optimizer
     log.info('Creating optimizer...')
     param_optimizer = list(model.named_parameters())
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+
+    unused_params = ['roberta.decoder.lm_head.bias',
+                     'roberta.decoder.lm_head.dense.weight',
+                     'roberta.decoder.lm_head.dense.bias',
+                     'roberta.decoder.lm_head.layer_norm.weight',
+                     'roberta.decoder.lm_head.layer_norm.bias']
+
+    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight', 'layer_norm.weight', 'layer_norm.bias']
+
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and n not in unused_params],
          'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and n not in unused_params],
+         'weight_decay': 0.0}
     ]
 
     if args.fp16:
@@ -185,7 +207,7 @@ def train(args, log):
                                  batch_size=args.batch_size,
                                  shuffle=False,
                                  num_workers=4,
-                                 collate_fn=GT_collate_fn)
+                                 collate_fn=lambda batch: GT_collate_fn(batch, model_type=args.model_type))
 
     # Train
     log.info('Training...')
@@ -219,7 +241,7 @@ def train(args, log):
                                        batch_size=args.batch_size,
                                        shuffle=True,
                                        num_workers=args.num_workers,
-                                       collate_fn=GT_collate_fn)
+                                       collate_fn=lambda batch: GT_collate_fn(batch, model_type=args.model_type))
 
         log.info(f'Starting epoch {epoch}...')
         model.train()

@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_type',
                     default='bert-base-uncased',
                     choices=['bert-base-uncased', 'roberta'],
-                    help='Number of sub-processes to use for data processing.')
+                    help='Tokenizer from which model to use.')
 parser.add_argument('--num_workers',
                     type=int,
                     default=4,
@@ -39,14 +39,18 @@ if args.model_type == 'bert-base-uncased':
     tokenizer = BertTokenizer('./../models/vocabs/bert-base-uncased-vocab.txt',
                               additional_special_tokens=['[GAP]'],
                               do_basic_tokenize=True)
+
     GAP_TOKEN = '[GAP]'
     UNK_TOKEN = '[UNK]'
     MAX_PAIR_LENGTH = 509
     LOWER = True
 
 elif args.model_type == 'roberta':
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
-    tokenizer.add_tokens(['<gap>'])
+    tokenizer = RobertaTokenizer('./models/vocabs/roberta-large-vocab.json',
+                                 './models/vocabs/roberta-large-merges.txt',
+                                 additional_special_tokens=['<gap>'],
+                                 do_basic_tokenize=False)
+
     GAP_TOKEN = '<gap>'
     UNK_TOKEN = '<unk>'
     MAX_PAIR_LENGTH = 508

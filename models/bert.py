@@ -2,16 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_transformers.modeling_bert import BertModel, BertPreTrainedModel
+from fairseq.models.roberta import RobertaModel
 
 
 class BertGTHead(nn.Module):
-    def __init__(self, config, window_size=15):
+    def __init__(self, hidden_size, window_size=15):
         super(BertGTHead, self).__init__()
         self.dtype = torch.float32
         self.window_size = window_size
 
-        self.gap_features_2_scores = nn.Linear(3 * config.hidden_size, 1)
-        self.cls_features_2_scores = nn.Linear(3 * config.hidden_size, 1)
+        self.gap_features_2_scores = nn.Linear(3 * hidden_size, 1)
+        self.cls_features_2_scores = nn.Linear(3 * hidden_size, 1)
 
     def forward(self, sequence_output, pooled_output, token_type_ids, word_mask, gap_ids):
         batch_size, seq_len, _ = sequence_output.shape
@@ -49,7 +50,10 @@ class BertGTHead(nn.Module):
         text_avg_pool = torch.sum(window, dim=1, keepdim=True) / num_tokens
 
         gap_features = torch.cat([gaps, window_max_pool, window_avg_pool], dim=-1)
-        cls_features = torch.cat([pooled_output.unsqueeze(1), text_max_pool, text_avg_pool], dim=-1)
+        if pooled_output is not None:
+            cls_features = torch.cat([pooled_output.unsqueeze(1), text_max_pool, text_avg_pool], dim=-1)
+        else:
+            cls_features = torch.cat([sequence_output[:, 0, :].unsqueeze(1), text_max_pool, text_avg_pool], dim=-1)
 
         gap_scores = self.gap_features_2_scores(gap_features).squeeze(-1)
         cls_scores = self.cls_features_2_scores(cls_features).squeeze(-1)
@@ -105,7 +109,7 @@ class BertForGappedText(BertPreTrainedModel):
     def __init__(self, config, window_size=15):
         super(BertForGappedText, self).__init__(config)
         self.bert = BertModel(config)
-        self.output_layer = BertGTHead(config, window_size=window_size)
+        self.output_layer = BertGTHead(config.hidden_size, window_size=window_size)
         self.apply(self.init_weights)
 
     def forward(self, input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps=None, position_ids=None, head_mask=None):
@@ -124,6 +128,39 @@ class BertForGappedText(BertPreTrainedModel):
                                        gap_ids=gap_ids)
 
         outputs = (gap_scores,) + outputs[2:]
+
+        if target_gaps is not None:
+            loss = F.cross_entropy(input=gap_scores, target=target_gaps)
+            outputs = (loss,) + outputs
+
+        return outputs
+
+
+class RobertaForGappedText(nn.Module):
+    def __init__(self, model_path, window_size=15):
+        super(RobertaForGappedText, self).__init__()
+        self.roberta = RobertaModel.from_pretrained(model_path).model
+        self.config = vars(self.roberta.args)
+        self.output_layer = BertGTHead(self.roberta.args.encoder_embed_dim, window_size=window_size)
+
+        self.output_layer.gap_features_2_scores.weight.data.normal_(mean=0.0, std=0.02)
+        self.output_layer.cls_features_2_scores.weight.data.normal_(mean=0.0, std=0.02)
+        self.output_layer.gap_features_2_scores.bias.data.zero_()
+        self.output_layer.cls_features_2_scores.bias.data.zero_()
+
+    def forward(self, input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps=None, position_ids=None, head_mask=None):
+        outputs = self.roberta(src_tokens=input_ids,
+                               features_only=True)
+
+        sequence_output = outputs[0]
+
+        gap_scores = self.output_layer(sequence_output=sequence_output,
+                                       pooled_output=None,
+                                       token_type_ids=token_type_ids,
+                                       word_mask=word_mask,
+                                       gap_ids=gap_ids)
+
+        outputs = (gap_scores,)
 
         if target_gaps is not None:
             loss = F.cross_entropy(input=gap_scores, target=target_gaps)
