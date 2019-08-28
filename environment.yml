@@ -18,4 +18,6 @@ dependencies:
   - tensorboard
   - tensorboardX
   - pip:
+    - pytorch-transformers
+    - fairseq
     - spacy-nightly
