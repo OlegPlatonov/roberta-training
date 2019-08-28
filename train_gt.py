@@ -103,12 +103,11 @@ def get_args():
     return args
 
 
-def train(args, log):
+def train(args, log, tb_writer):
     log.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
         yaml.dump(vars(args), file)
 
-    tb_writer = SummaryWriter(args.save_dir)
     device = 'cpu' if args.no_cuda else 'cuda'
     num_gpus = 0 if args.no_cuda else torch.cuda.device_count()
     log.info(f'Number of GPUs to use: {num_gpus}.')
@@ -401,8 +400,11 @@ if __name__ == '__main__':
     args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
     log = get_logger(args.save_dir, args.name)
     log.info(f'Results will be saved to {args.save_dir}.')
+    tb_writer = SummaryWriter(args.save_dir)
 
     try:
-        train(args, log)
+        train(args, log, tb_writer)
     except:
         log.exception('An error occured...')
+
+    tb_writer.close()

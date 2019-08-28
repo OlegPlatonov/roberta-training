@@ -95,13 +95,11 @@ def get_args():
     return args
 
 
-def train(args, log):
+def train(args, log, tb_writer):
     log.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     if args.local_rank == 0:
         with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
             yaml.dump(vars(args), file)
-
-    tb_writer = SummaryWriter(args.save_dir) if args.local_rank == 0 else None
 
     device = torch.device('cuda', args.local_rank)
     log.warning(f'Using GPU {args.local_rank}.')
@@ -358,15 +356,20 @@ if __name__ == '__main__':
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
         log = get_logger(args.save_dir, args.name, log_file=f'log_0.txt')
         log.info(f'Results will be saved to {args.save_dir}.')
+        tb_writer = SummaryWriter(args.save_dir)
     else:
         torch.distributed.barrier()
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True, use_existing_dir=True)
         log = get_logger(args.save_dir, args.name, verbose=False, log_file=f'log_{args.local_rank}.txt')
+        tb_writer = None
 
     if args.local_rank == 0:
         torch.distributed.barrier()
 
     try:
-        train(args, log)
+        train(args, log, tb_writer)
     except:
         log.exception('An error occured...')
+
+    if tb_writer is not None:
+        tb_writer.close()
