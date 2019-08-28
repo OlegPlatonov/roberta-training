@@ -46,8 +46,8 @@ if args.model_type == 'bert-base-uncased':
     LOWER = True
 
 elif args.model_type == 'roberta':
-    tokenizer = RobertaTokenizer('./models/vocabs/roberta-large-vocab.json',
-                                 './models/vocabs/roberta-large-merges.txt',
+    tokenizer = RobertaTokenizer('./../models/vocabs/roberta-large-vocab.json',
+                                 './../models/vocabs/roberta-large-merges.txt',
                                  additional_special_tokens=['<gap>'],
                                  do_basic_tokenize=False)
 
@@ -182,12 +182,12 @@ def process_file(file, folder, save_path, chunk_size, num_gaps, min_space, num_r
         for para in text:
             for sent in para.sents:
                 if len(sent) <= max_len:
-                    sent = tokenizer.tokenize(sent.text)
+                    sent = tokenizer.tokenize('A ' + sent.text)[1:]   # Includes leading whitespace for correct RoBERTa tokenization.
                     if not phrase_is_unk(sent):
                         phrases.append(' '.join(sent))
                 else:
                     split = split_sent(sent, target_len=target_len, min_len=min_len, max_len=max_len)
-                    split = [tokenizer.tokenize(phrase.text) for phrase in split]
+                    split = [tokenizer.tokenize('A ' + phrase.text)[1:] for phrase in split]
                     split = [' '.join(phrase) for phrase in split if not phrase_is_unk(phrase)]
                     phrases += split
 
@@ -395,4 +395,5 @@ def phrase_is_unk(phrase):
 if __name__ == '__main__':
     random.seed(args.seed)
     np.random.seed(args.seed)
+    print('Starting data preprocessing for Gapped Text task...')
     process_all(num_workers=args.num_workers)
