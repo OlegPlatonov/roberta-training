@@ -67,6 +67,9 @@ def get_args():
     parser.add_argument('--num_epochs',
                         type=int,
                         default=1)
+    parser.add_argument('--max_steps',
+                        type=int,
+                        default=-1)
     parser.add_argument('--learning_rate',
                         default=1e-5,
                         type=float,
@@ -117,6 +120,8 @@ def train(args, log, tb_writer):
 
     num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, log)
     num_optimization_steps = sum(num_data_samples) // args.batch_size // args.accumulation_steps
+    if args.max_steps > 0:
+        num_optimization_steps = min(num_optimization_steps, args.max_steps)
     log.info(f'Total number of optimization steps: {num_optimization_steps}.')
 
     # Set random seed
@@ -306,6 +311,10 @@ def train(args, log, tb_writer):
                         else:
                             for param in model.bert.parameters():
                                 param.requires_grad = True
+
+                    if global_step == args.max_steps:
+                        log.info('Reached maximum number of optimization steps.')
+                        break
 
                     if samples_till_eval <= 0:
                         samples_till_eval = args.eval_every
