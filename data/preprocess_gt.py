@@ -66,6 +66,16 @@ split_tokens_2 = set(['what', 'instead', 'have', 'has', 'had', 'will', 'there',
                       'those', 'this', 'these', 'then', 'so', 'such', 'by'])
 
 
+def fix_roberta_punctuation(text):
+    for i in range(len(text)):
+        if text[i] == 'Ġ.':
+            text[i] = '.'
+        elif text[i] == 'Ġ,':
+            text[i] = ','
+
+    return text
+
+
 def get_raw_texts(file):
     texts = []
 
@@ -183,11 +193,15 @@ def process_file(file, folder, save_path, chunk_size, num_gaps, min_space, num_r
             for sent in para.sents:
                 if len(sent) <= max_len:
                     sent = tokenizer.tokenize('A ' + sent.text)[1:]   # Includes leading whitespace for correct RoBERTa tokenization.
+                    if args.model_type == 'roberta':
+                        sent = fix_roberta_punctuation(sent)
                     if not phrase_is_unk(sent):
                         phrases.append(' '.join(sent))
                 else:
                     split = split_sent(sent, target_len=target_len, min_len=min_len, max_len=max_len)
                     split = [tokenizer.tokenize('A ' + phrase.text)[1:] for phrase in split]
+                    if args.model_type == 'roberta':
+                        split = [fix_roberta_punctuation(phrase) for phrase in split]
                     split = [' '.join(phrase) for phrase in split if not phrase_is_unk(phrase)]
                     phrases += split
 
