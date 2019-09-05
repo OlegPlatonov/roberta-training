@@ -15,7 +15,7 @@ from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 from models.bert import BertForGappedText, RobertaForGappedText
-from models.optimizer import BertAdam
+from models.optimizer import BertAdam, WarmupLinearSchedule
 from utils.datasets_gt import GT_Dataset, GT_collate_fn
 from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
 
@@ -58,6 +58,10 @@ def get_args():
     parser.add_argument('--accumulation_steps',
                         type=int,
                         default=1)
+    parser.add_argument('--fp16',
+                        type=lambda s: s.lower().startswith('t'),
+                        default=False,
+                        help='Whether to use 16-bit float precision instead of 32-bit')
     parser.add_argument('--num_epochs',
                         type=int,
                         default=1)
@@ -137,6 +141,11 @@ def train(args, log, tb_writer):
     else:
         raise ValueError(f'Model architecture {args.model_type} is not found.')
 
+    if args.fp16:
+        log.info('Using 16-bit float precision.')
+        model.half()
+        model.output_layer.dtype = torch.float16
+
     if args.local_rank == 0:
         with open(os.path.join(args.save_dir, 'config.json'), 'w') as file:
             if hasattr(model.config, '__dict__'):
@@ -174,10 +183,21 @@ def train(args, log, tb_writer):
          'weight_decay': 0.0}
     ]
 
-    optimizer = BertAdam(optimizer_grouped_parameters,
-                         lr=args.learning_rate,
-                         warmup=args.warmup_proportion,
-                         t_total=num_optimization_steps)
+    if args.fp16:
+        from apex.optimizers import FP16_Optimizer
+        from apex.optimizers import FusedAdam
+        optimizer = FusedAdam(optimizer_grouped_parameters,
+                              lr=args.learning_rate,
+                              bias_correction=False,
+                              max_grad_norm=1.0)
+        optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
+        warmup_linear = WarmupLinearSchedule(warmup=args.warmup_proportion,
+                                             t_total=num_optimization_steps)
+    else:
+        optimizer = BertAdam(optimizer_grouped_parameters,
+                             lr=args.learning_rate,
+                             warmup=args.warmup_proportion,
+                             t_total=num_optimization_steps)
 
     # Get dev data loader
     dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
@@ -241,19 +261,29 @@ def train(args, log, tb_writer):
 
                 loss_val += loss.item()
 
-                loss.backward()
+                if args.fp16:
+                    optimizer.backward(loss)
+                else:
+                    loss.backward()
 
                 samples_processed += current_batch_size * world_size
                 samples_till_eval -= current_batch_size * world_size
                 progress_bar.update(current_batch_size * world_size)
 
                 if step % args.accumulation_steps == 0:
+                    if args.fp16:
+                        # modify learning rate with special warm up BERT uses
+                        # if args.fp16 is False, BertAdam is used that handles this automatically
+                        current_lr = args.learning_rate * warmup_linear.get_lr(global_step, args.warmup_proportion)
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = current_lr
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
 
                     # Log info
-                    current_lr = optimizer.get_lr()[0]
+                    if not args.fp16:
+                        current_lr = optimizer.get_lr()[0]
                     progress_bar.set_postfix(epoch=epoch, loss=loss_val, step=global_step, lr=current_lr)
                     if args.local_rank == 0:
                         tb_writer.add_scalar('train/Loss', loss_val, global_step)
