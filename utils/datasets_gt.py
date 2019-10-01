@@ -123,3 +123,53 @@ def GT_collate_fn(batch, model_type):
     target_gaps = torch.tensor(target_gaps)
 
     return input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps
+
+class SOP_Dataset(data.Dataset):
+    def __init__(self, data_path):
+        super(SOP_Dataset, self).__init__()
+        self.data = dict()
+        self.data['segment_1'] = list(pd.read_csv(data_path, usecols=['segment_1'], squeeze=True,
+                                                  dtype='str', engine='c'))
+        self.data['segment_2'] = list(pd.read_csv(data_path, usecols=['segment_2'], squeeze=True,
+                                                  dtype='str', engine='c'))
+
+    def __len__(self):
+        return len(self.data['segment_1']) * 2
+
+    def __getitem__(self, idx):
+        text_idx = idx // 2
+        swap = True if idx % 2 == 1 else False
+
+        segment_1 = self.data['segment_1'][text_idx]
+        segment_2 = self.data['segment_2'][text_idx]
+        if swap:
+            segment_1, segment_2 = segment_2, segment_1
+
+        target = 0 if not swap else 1
+
+        return segment_1, segment_2, target
+
+
+def SOP_collate_fn(batch, model_type):
+    input_ids = []
+    token_type_ids = []
+    attention_mask = []
+    targets = []
+
+    for segment_1, segment_2, target in batch:
+        sequence_1 = text_transforms[model_type](segment_1)
+        sequence_1 = tokenizers[model_type].convert_tokens_to_ids(sequence_1)
+        sequence_2 = fragment_transforms[model_type](segment_2)
+        sequence_2 = tokenizers[model_type].convert_tokens_to_ids(sequence_2)
+        full_sequence = sequence_1 + sequence_2
+        input_ids.append(full_sequence)
+        token_type_ids.append([0 for _ in range(len(sequence_1))] + [1 for _ in range(len(sequence_2))])
+        attention_mask.append([1 for _ in full_sequence])
+        targets.append(target)
+
+    input_ids = torch.tensor(pad_2d(input_ids, pad_value=pad_token_ids[model_type]))
+    token_type_ids = torch.tensor(pad_2d(token_type_ids, pad_value=1))
+    attention_mask = torch.tensor(pad_2d(attention_mask))
+    targets = torch.tensor(targets)
+
+    return input_ids, token_type_ids, attention_mask, targets

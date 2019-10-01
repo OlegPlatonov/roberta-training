@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_transformers.modeling_bert import BertModel, BertPreTrainedModel
+from pytorch_transformers.modeling_bert import BertModel, BertPreTrainedModel, gelu
 from fairseq.models.roberta import RobertaModel
 
 
@@ -164,6 +164,47 @@ class RobertaForGappedText(nn.Module):
 
         if target_gaps is not None:
             loss = F.cross_entropy(input=gap_scores, target=target_gaps)
+            outputs = (loss,) + outputs
+
+        return outputs
+
+
+class BertSOPHead(nn.Module):
+    def __init__(self, hidden_size):
+        super(BertSOPHead, self).__init__()
+        self.linear = nn.Linear(hidden_size, hidden_size)
+        self.output_proj = nn.Linear(hidden_size, 2)
+
+    def forward(self, sequence_output):
+        hidden = gelu(self.linear(sequence_output[:, 0]))
+        scores = self.output_proj(hidden)
+
+        return scores
+
+class RobertaForSOP(nn.Module):
+    def __init__(self, model_path):
+        super(RobertaForSOP, self).__init__()
+        self.roberta = RobertaModel.from_pretrained(model_path).model
+        self.config = vars(self.roberta.args)
+        self.output_layer = BertSOPHead(self.roberta.args.encoder_embed_dim)
+
+        self.output_layer.linear.weight.data.normal_(mean=0.0, std=0.02)
+        self.output_layer.output_proj.weight.data.normal_(mean=0.0, std=0.02)
+        self.output_layer.linear.bias.data.zero_()
+        self.output_layer.output_proj.bias.data.zero_()
+
+    def forward(self, input_ids, token_type_ids, attention_mask, targets=None):
+        outputs = self.roberta(src_tokens=input_ids,
+                               features_only=True)
+
+        sequence_output = outputs[0]
+
+        scores = self.output_layer(sequence_output=sequence_output)
+
+        outputs = (scores,)
+
+        if targets is not None:
+            loss = F.cross_entropy(input=scores, target=targets)
             outputs = (loss,) + outputs
 
         return outputs
