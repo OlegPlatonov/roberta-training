@@ -130,19 +130,21 @@ class CheckpointSaver:
         if self.log is not None:
             self.log.info(message)
 
-    def save(self, step, model, metric_val, optimizer=None):
+    def save(self, step, model, args, metric_val, optimizer=None):
         """Save model parameters to disk.
 
         Args:
             step (int): Total number of examples seen during training so far.
             model (torch.nn.DataParallel): Model to save.
             metric_val (float): Determines whether checkpoint is best so far.
-            config (dict): Model config.
             optimizer (torch.optimizer): If not None, also saves optimizer.
         """
 
         if hasattr(model, 'module'):
             model = model.module
+
+        if args.model_type == 'roberta':
+            model = model.roberta
 
         checkpoint_path = os.path.join(self.save_dir,
                                        'step_{}.pth.tar'.format(step))
@@ -156,7 +158,8 @@ class CheckpointSaver:
             self.best_val = metric_val
             best_path = os.path.join(self.save_dir, 'best.pth.tar')
             shutil.copy(checkpoint_path, best_path)
-            shutil.copy(checkpoint_path + '.optim', best_path + '.optim')
+            if optimizer is not None:
+                shutil.copy(checkpoint_path + '.optim', best_path + '.optim')
             self._print('New best checkpoint at step {}...'.format(step))
 
         # Add checkpoint path to priority queue (lowest priority removed first)

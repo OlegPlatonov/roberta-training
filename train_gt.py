@@ -368,7 +368,7 @@ def evaluate_and_save(model, optimizer, data_loader, device, tb_writer, log, glo
     log.info('Saving checkpoint at step {}...'.format(global_step))
     saver.save(step=global_step,
                model=model,
-               optimizer=optimizer,
+               args=args,
                metric_val=results['Accuracy'])
 
     # Log to console
