@@ -153,6 +153,13 @@ class CheckpointSaver:
             torch.save(optimizer.state_dict(), checkpoint_path + '.optim')
         self._print('Saved checkpoint: {}'.format(checkpoint_path))
 
+        # Last checkpoint
+        last_path = os.path.join(self.save_dir, 'last.pth.tar')
+        shutil.copy(checkpoint_path, last_path)
+        if optimizer is not None:
+            shutil.copy(checkpoint_path + '.optim', last_path + '.optim')
+        self._print('{} is now checkpoint from step {}...'.format(last_path, step))
+
         if self.is_best(metric_val):
             # Save the best model
             self.best_val = metric_val
