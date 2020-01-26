@@ -143,9 +143,6 @@ class CheckpointSaver:
         if hasattr(model, 'module'):
             model = model.module
 
-        if args.model_type == 'roberta':
-            model = model.roberta
-
         checkpoint_path = os.path.join(self.save_dir,
                                        'step_{}.pth.tar'.format(step))
         torch.save(model.state_dict(), checkpoint_path)
