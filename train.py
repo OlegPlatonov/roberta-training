@@ -19,9 +19,9 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
-from models.bert import RobertaForGappedText
-from utils.datasets_gt import GT_Dataset, GT_collate_fn
-from utils.utils_gt import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
+from models import RobertaForGappedText
+from datasets import GT_Dataset, GT_collate_fn
+from utils import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
 
 
 """
