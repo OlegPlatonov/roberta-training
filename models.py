@@ -2,30 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers import RobertaModel
+from transformers.modeling_roberta import RobertaModel, ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
 from transformers.configuration_roberta import RobertaConfig
 from transformers.modeling_bert import BertPreTrainedModel
 
 
-ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP = {
-    "roberta-base":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-base-pytorch_model.bin",
-    "roberta-large":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-large-pytorch_model.bin",
-    "roberta-large-mnli":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-large-mnli-pytorch_model.bin",
-    "distilroberta-base":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/distilroberta-base-pytorch_model.bin",
-    "roberta-base-openai-detector":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-base-openai-detector-pytorch_model.bin",
-    "roberta-large-openai-detector":
-        "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-large-openai-detector-pytorch_model.bin",
-}
-
-
-class GT_Head(nn.Module):
+class GTHead(nn.Module):
     def __init__(self, hidden_size):
-        super(GT_Head, self).__init__()
+        super(GTHead, self).__init__()
         self.features_2_scores = nn.Linear(hidden_size, 1)
 
     def forward(self, sequence_output, gap_ids):
@@ -49,7 +33,7 @@ class RobertaForGappedText(BertPreTrainedModel):
     def __init__(self, config):
         super(RobertaForGappedText, self).__init__(config)
         self.roberta = RobertaModel(config)
-        self.gt_head = GT_Head(config.hidden_size)
+        self.gt_head = GTHead(config.hidden_size)
 
         self.init_weights()
 

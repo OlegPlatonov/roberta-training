@@ -58,9 +58,9 @@ text_transforms = {
 }
 
 
-class GT_Dataset(data.Dataset):
+class Dataset(data.Dataset):
     def __init__(self, data_path, num_fragments=8):
-        super(GT_Dataset, self).__init__()
+        super(Dataset, self).__init__()
         self.num_fragments = num_fragments
         self.data = dict()
         self.data['text'] = list(pd.read_csv(data_path, usecols=['text'], squeeze=True,
@@ -94,7 +94,7 @@ def pad_2d(array_2d, pad_value=0):
     return array_2d
 
 
-def GT_collate_fn(batch):
+def collate_fn(batch):
     model_type = 'roberta'
 
     input_ids = []
@@ -125,4 +125,3 @@ def GT_collate_fn(batch):
     target_gaps = torch.tensor(target_gaps)
 
     return input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps
-

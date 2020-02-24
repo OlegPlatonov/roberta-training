@@ -20,13 +20,8 @@ except ImportError:
     from tensorboardX import SummaryWriter
 
 from models import RobertaForGappedText
-from datasets import GT_Dataset, GT_collate_fn
+from datasets import Dataset, collate_fn
 from utils import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
-
-
-"""
-Adapted from https://github.com/chrischute/squad and https://github.com/huggingface/pytorch-pretrained-BERT.
-"""
 
 
 def get_args():
@@ -185,21 +180,18 @@ def train(args, log, tb_writer):
                                         output_device=args.local_rank,
                                         find_unused_parameters=True)
 
-
-
     sampler = RandomSampler if args.local_rank == -1 else DistributedSampler
 
     # Get dev data loader
     dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
     log.info(f'Creating dev dataset from {dev_data_file}...')
-    dev_dataset = GT_Dataset(dev_data_file)
+    dev_dataset = Dataset(dev_data_file)
     dev_sampler = sampler(dev_dataset)
     dev_loader = DataLoader(dev_dataset,
-                                 batch_size=args.batch_size,
-                                 sampler=dev_sampler,
-                                 num_workers=args.num_workers,
-                                 collate_fn=GT_collate_fn)
-
+                            batch_size=args.batch_size,
+                            sampler=dev_sampler,
+                            num_workers=args.num_workers,
+                            collate_fn=collate_fn)
 
     global_step = 0
     samples_processed = 0
@@ -215,13 +207,13 @@ def train(args, log, tb_writer):
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
         train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
         log.info(f'Creating training dataset from {train_data_file}...')
-        train_dataset = GT_Dataset(train_data_file)
+        train_dataset = Dataset(train_data_file)
         train_sampler = sampler(train_dataset)
         train_loader = DataLoader(train_dataset,
-                                       batch_size=args.batch_size,
-                                       sampler=train_sampler,
-                                       num_workers=args.num_workers,
-                                       collate_fn=GT_collate_fn)
+                                  batch_size=args.batch_size,
+                                  sampler=train_sampler,
+                                  num_workers=args.num_workers,
+                                  collate_fn=collate_fn)
 
         if args.local_rank != -1:
             torch.distributed.barrier()
@@ -230,7 +222,8 @@ def train(args, log, tb_writer):
         model.train()
         model.zero_grad()
         loss_val = 0
-        with torch.enable_grad(), tqdm(total=len(train_loader.dataset), disable=args.local_rank not in [-1, 0]) as progress_bar:
+        with torch.enable_grad(), \
+             tqdm(total=len(train_loader.dataset), disable=args.local_rank not in [-1, 0]) as progress_bar:
             for step, batch in enumerate(train_loader, 1):
                 batch = tuple(x.to(device) for x in batch)
 
@@ -285,7 +278,6 @@ def train(args, log, tb_writer):
                     if samples_till_eval <= 0:
                         samples_till_eval = args.eval_every
                         evaluate_and_save(model=model,
-                                          optimizer=optimizer,
                                           data_loader=dev_loader,
                                           device=device,
                                           tb_writer=tb_writer,
@@ -296,7 +288,6 @@ def train(args, log, tb_writer):
 
             if args.eval_after_epoch:
                 evaluate_and_save(model=model,
-                                  optimizer=optimizer,
                                   data_loader=dev_loader,
                                   device=device,
                                   tb_writer=tb_writer,
@@ -306,9 +297,9 @@ def train(args, log, tb_writer):
                                   args=args)
 
 
-def evaluate_and_save(model, optimizer, data_loader, device, tb_writer, log, global_step, saver, args):
+def evaluate_and_save(model, data_loader, device, tb_writer, log, global_step, saver, args):
     log.info('Evaluating...')
-    results = evaluate_GT(model, data_loader, device)
+    results = evaluate(model, data_loader, device)
 
     results_str = ', '.join('{}: {:05.2f}'.format(k, v)
                             for k, v in results.items())
@@ -326,7 +317,7 @@ def evaluate_and_save(model, optimizer, data_loader, device, tb_writer, log, glo
                    metric_val=results['Accuracy'])
 
 
-def evaluate_GT(model, data_loader, device):
+def evaluate(model, data_loader, device):
     loss_meter = AverageMeter()
     world_size = torch.distributed.get_world_size() if args.local_rank != -1 else 1
 

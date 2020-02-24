@@ -8,7 +8,7 @@ import string
 import argparse
 from pathos.multiprocessing import Pool
 from functools import partial
-from pytorch_transformers import BertTokenizer, RobertaTokenizer
+from transformers import BertTokenizer, RobertaTokenizer
 
 
 parser = argparse.ArgumentParser()
@@ -57,13 +57,12 @@ elif args.model_type == 'roberta':
     LOWER = False
 
 
-split_tokens_1 = set(['.', '?', '!', ',', ':', ';',
-                      'that', 'which', 'who', 'whom', 'whose', 'when', 'where',
-                      'of', 'for', 'from', 'was', 'is', 'are', 'were', 'and', 'or',
-                      'but', 'if', 'whether', 'while', 'because', 'though', 'as', 'to'])
+split_tokens_1 = {'.', '?', '!', ',', ':', ';', 'that', 'which', 'who', 'whom', 'whose', 'when', 'where', 'of', 'for',
+                  'from', 'was', 'is', 'are', 'were', 'and', 'or', 'but', 'if', 'whether', 'while', 'because', 'though',
+                  'as', 'to'}
 
-split_tokens_2 = set(['what', 'instead', 'have', 'has', 'had', 'will', 'there',
-                      'those', 'this', 'these', 'then', 'so', 'such', 'by'])
+split_tokens_2 = {'what', 'instead', 'have', 'has', 'had', 'will', 'there', 'those', 'this', 'these', 'then', 'so',
+                  'such', 'by'}
 
 
 def fix_roberta_punctuation(text):
@@ -192,7 +191,8 @@ def process_file(file, folder, save_path, chunk_size, num_gaps, min_space, num_r
         for para in text:
             for sent in para.sents:
                 if len(sent) <= max_len:
-                    sent = tokenizer.tokenize('A ' + sent.text)[1:]   # Includes leading whitespace for correct RoBERTa tokenization.
+                    # Include leading whitespace for correct RoBERTa tokenization.
+                    sent = tokenizer.tokenize('A ' + sent.text)[1:]
                     if args.model_type == 'roberta':
                         sent = fix_roberta_punctuation(sent)
                     if not phrase_is_unk(sent):
@@ -311,7 +311,8 @@ def select_split_idx(all_split_idx, target_len):
     while next_target < all_split_idx[-1]:
         for i in range(start, len(all_split_idx)):
             if all_split_idx[i] >= next_target:
-                if all_split_idx[i] - next_target < next_target - all_split_idx[i - 1] or all_split_idx[i - 1] == split_idx[-1]:
+                if all_split_idx[i] - next_target < next_target - all_split_idx[i - 1] or \
+                        all_split_idx[i - 1] == split_idx[-1]:
                     best_i = i
                 else:
                     best_i = i - 1
@@ -328,7 +329,7 @@ def select_split_idx(all_split_idx, target_len):
 
 
 def balance_split_idx(split_idx, sent, target_len, min_len, max_len):
-    not_start = set(['.', '?', '!', ',', ':', ';', '-', '\'s'])
+    not_start = {'.', '?', '!', ',', ':', ';', '-', '\'s'}
 
     balanced_split_idx = [0]
     for i in range(1, len(split_idx)):

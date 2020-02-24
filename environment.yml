@@ -6,7 +6,7 @@ channels:
 dependencies:
   - python=3.7
   - pip
-  - regex=2019.04.14
+  - regex
   - numpy
   - pandas
   - tqdm
@@ -15,5 +15,5 @@ dependencies:
   - pathos
   - tensorboard
   - pip:
-    - torch==1.1
+    - torch==1.3
     - spacy-nightly
