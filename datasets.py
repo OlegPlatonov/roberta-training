@@ -1,59 +1,46 @@
 import pandas as pd
 import torch
 import torch.utils.data as data
-from transformers import BertTokenizer, RobertaTokenizer
+from transformers import RobertaTokenizer
 
-bert_tokenizer = BertTokenizer('./models/vocabs/bert-base-uncased-vocab.txt',
-                               additional_special_tokens=['[GAP]'],
-                               do_basic_tokenize=False)
-
-roberta_tokenizer = RobertaTokenizer('./models/vocabs/roberta-large-vocab.json',
-                                     './models/vocabs/roberta-large-merges.txt',
+roberta_tokenizer = RobertaTokenizer('vocabs/roberta-large-vocab.json',
+                                     'vocabs/roberta-large-merges.txt',
                                      additional_special_tokens=['<gap>'],
                                      do_basic_tokenize=False)
 
 tokenizers = {
-    'bert-base-uncased': bert_tokenizer,
     'roberta': roberta_tokenizer
 }
 
 special_tokens = {
-    'bert-base-uncased': ['[PAD]', '[UNK]', '[CLS]', '[SEP]', '[MASK]', '[GAP]'],
     'roberta': ['<s>', '<pad>', '</s>', '<unk>', '<mask>', '<gap>']
 }
 
 special_token_ids = {
-    'bert-base-uncased': tokenizers['bert-base-uncased'].convert_tokens_to_ids(special_tokens['bert-base-uncased']),
     'roberta': tokenizers['roberta'].convert_tokens_to_ids(special_tokens['roberta'])
 }
 
 gap_tokens = {
-    'bert-base-uncased': '[GAP]',
     'roberta': '<gap>'
 }
 
 pad_tokens = {
-    'bert-base-uncased': '[PAD]',
     'roberta': '<pad>'
 }
 
 gap_token_ids = {
-    'bert-base-uncased': tokenizers['bert-base-uncased'].convert_tokens_to_ids(['[GAP]'])[0],
     'roberta': tokenizers['roberta'].convert_tokens_to_ids(['<gap>'])[0]
 }
 
 pad_token_ids = {
-    'bert-base-uncased': tokenizers['bert-base-uncased'].convert_tokens_to_ids(['[PAD]'])[0],
     'roberta': tokenizers['roberta'].convert_tokens_to_ids(['<pad>'])[0]
 }
 
 fragment_transforms = {
-    'bert-base-uncased': lambda fragment: ['[CLS]'] + fragment.split() + ['[SEP]'],
     'roberta': lambda fragment: ['<s>'] + fragment.split() + ['</s>', '</s>']
 }
 
 text_transforms = {
-    'bert-base-uncased': lambda text: text.split() + ['[SEP]'],
     'roberta': lambda text: text.split() + ['</s>']
 }
 

@@ -72,7 +72,7 @@ class CheckpointSaver:
     Adapted from https://github.com/chrischute/squad.
     """
     def __init__(self, save_dir, max_checkpoints, metric_name,
-                 maximize_metric=False, log=None):
+                 maximize_metric=False, logger=None):
         super(CheckpointSaver, self).__init__()
 
         self.save_dir = save_dir
@@ -81,7 +81,7 @@ class CheckpointSaver:
         self.maximize_metric = maximize_metric
         self.best_val = None
         self.ckpt_paths = queue.PriorityQueue()
-        self.log = log
+        self.logger = logger
         self._print('Saver will {}imize {}...'
                     .format('max' if maximize_metric else 'min', metric_name))
 
@@ -104,8 +104,8 @@ class CheckpointSaver:
 
     def _print(self, message):
         """Print a message if logging is enabled."""
-        if self.log is not None:
-            self.log.info(message)
+        if self.logger is not None:
+            self.logger.info(message)
 
     def save(self, step, model, args, metric_val, optimizer=None):
         if hasattr(model, 'module'):
@@ -155,7 +155,7 @@ class CheckpointSaver:
                 pass
 
 
-def get_num_data_samples(data_folder, num_epochs, log=None):
+def get_num_data_samples(data_folder, num_epochs, logger=None):
     """
     Adapted from https://github.com/huggingface/transformers.
     """
@@ -173,14 +173,14 @@ def get_num_data_samples(data_folder, num_epochs, log=None):
 
     num_unique_data_epochs = len(num_data_samples)
 
-    if log is not None:
-        log.info(f'{num_unique_data_epochs} unique epochs of data found.')
+    if logger is not None:
+        logger.info(f'{num_unique_data_epochs} unique epochs of data found.')
 
     for i in range(num_epochs - len(num_data_samples)):
         num_data_samples.append(num_data_samples[i])
 
-    if log is not None:
-        log.info(f'Number of samples per epoch: {num_data_samples}')
+    if logger is not None:
+        logger.info(f'Number of samples per epoch: {num_data_samples}')
 
     return num_data_samples, num_unique_data_epochs
 

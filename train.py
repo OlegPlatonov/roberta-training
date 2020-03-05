@@ -104,28 +104,28 @@ def get_args():
     return args
 
 
-def train(args, log, tb_writer):
-    log.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
+def train(args, logger, tb_writer):
+    logger.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     if args.local_rank in [-1, 0]:
         with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
             yaml.dump(vars(args), file)
 
     device_id = args.local_rank if args.local_rank != -1 else 0
     device = torch.device('cuda', device_id)
-    log.warning(f'Using GPU {args.local_rank}.')
+    logger.warning(f'Using GPU {args.local_rank}.')
 
     world_size = torch.distributed.get_world_size() if args.local_rank != -1 else 1
-    log.info(f'Total number of GPUs used: {world_size}.')
-    log.info(f'Effective batch size: {args.batch_size * world_size * args.accumulation_steps}.')
+    logger.info(f'Total number of GPUs used: {world_size}.')
+    logger.info(f'Effective batch size: {args.batch_size * world_size * args.accumulation_steps}.')
 
-    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, log)
+    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, logger)
     num_optimization_steps = sum(num_data_samples) // world_size // args.batch_size // args.accumulation_steps
     if args.max_steps > 0:
         num_optimization_steps = min(num_optimization_steps, args.max_steps)
-    log.info(f'Total number of optimization steps: {num_optimization_steps}.')
+    logger.info(f'Total number of optimization steps: {num_optimization_steps}.')
 
     # Set random seed
-    log.info(f'Using random seed {args.seed}.')
+    logger.info(f'Using random seed {args.seed}.')
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -135,7 +135,7 @@ def train(args, log, tb_writer):
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    log.info(f'Loading model {args.model}...')
+    logger.info(f'Loading model {args.model}...')
     model = RobertaForGappedText.from_pretrained(args.model)
 
     if args.local_rank in [-1, 0]:
@@ -152,10 +152,10 @@ def train(args, log, tb_writer):
                             max_checkpoints=args.max_checkpoints,
                             metric_name='Accuracy',
                             maximize_metric=True,
-                            log=log)
+                            logger=logger)
 
     # Get optimizer
-    log.info('Creating optimizer...')
+    logger.info('Creating optimizer...')
     no_decay = ['bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
         {
@@ -184,7 +184,7 @@ def train(args, log, tb_writer):
 
     # Get dev data loader
     dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
-    log.info(f'Creating dev dataset from {dev_data_file}...')
+    logger.info(f'Creating dev dataset from {dev_data_file}...')
     dev_dataset = Dataset(dev_data_file)
     dev_sampler = sampler(dev_dataset)
     dev_loader = DataLoader(dev_dataset,
@@ -197,7 +197,7 @@ def train(args, log, tb_writer):
     samples_processed = 0
 
     # Train
-    log.info('Training...')
+    logger.info('Training...')
     samples_till_eval = args.eval_every
     for epoch in range(1, args.num_epochs + 1):
         if args.local_rank != -1:
@@ -206,7 +206,7 @@ def train(args, log, tb_writer):
         # Get train data loader for current epoch
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
         train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
-        log.info(f'Creating training dataset from {train_data_file}...')
+        logger.info(f'Creating training dataset from {train_data_file}...')
         train_dataset = Dataset(train_data_file)
         train_sampler = sampler(train_dataset)
         train_loader = DataLoader(train_dataset,
@@ -218,7 +218,7 @@ def train(args, log, tb_writer):
         if args.local_rank != -1:
             torch.distributed.barrier()
 
-        log.info(f'Starting epoch {epoch}...')
+        logger.info(f'Starting epoch {epoch}...')
         model.train()
         model.zero_grad()
         loss_val = 0
@@ -272,7 +272,7 @@ def train(args, log, tb_writer):
                     loss_val = 0
 
                     if global_step == args.max_steps:
-                        log.info('Reached maximum number of optimization steps.')
+                        logger.info('Reached maximum number of optimization steps.')
                         break
 
                     if samples_till_eval <= 0:
@@ -281,7 +281,7 @@ def train(args, log, tb_writer):
                                           data_loader=dev_loader,
                                           device=device,
                                           tb_writer=tb_writer,
-                                          log=log,
+                                          logger=logger,
                                           global_step=global_step,
                                           saver=saver,
                                           args=args)
@@ -291,26 +291,26 @@ def train(args, log, tb_writer):
                                   data_loader=dev_loader,
                                   device=device,
                                   tb_writer=tb_writer,
-                                  log=log,
+                                  logger=logger,
                                   global_step=global_step,
                                   saver=saver,
                                   args=args)
 
 
-def evaluate_and_save(model, data_loader, device, tb_writer, log, global_step, saver, args):
-    log.info('Evaluating...')
+def evaluate_and_save(model, data_loader, device, tb_writer, logger, global_step, saver, args):
+    logger.info('Evaluating...')
     results = evaluate(model, data_loader, device)
 
     results_str = ', '.join('{}: {:05.2f}'.format(k, v)
                             for k, v in results.items())
-    log.info('Dev {}'.format(results_str))
+    logger.info('Dev {}'.format(results_str))
 
     if args.local_rank in [-1, 0]:
-        log.info('Visualizing in TensorBoard...')
+        logger.info('Visualizing in TensorBoard...')
         for k, v in results.items():
             tb_writer.add_scalar('dev/{}'.format(k), v, global_step)
 
-        log.info('Saving checkpoint at step {}...'.format(global_step))
+        logger.info('Saving checkpoint at step {}...'.format(global_step))
         saver.save(step=global_step,
                    model=model,
                    args=args,
@@ -371,22 +371,22 @@ if __name__ == '__main__':
 
     if args.local_rank in [-1, 0]:
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
-        log = get_logger(args.save_dir, args.name, log_file=f'log_0.txt')
-        log.info(f'Results will be saved to {args.save_dir}.')
+        logger = get_logger(args.save_dir, args.name, log_file=f'log_0.txt')
+        logger.info(f'Results will be saved to {args.save_dir}.')
         tb_writer = SummaryWriter(args.save_dir)
     else:
         torch.distributed.barrier()
         args.save_dir = get_save_dir(args.save_dir, args.name, training=True, use_existing_dir=True)
-        log = get_logger(args.save_dir, args.name, verbose=False, log_file=f'log_{args.local_rank}.txt')
+        logger = get_logger(args.save_dir, args.name, verbose=False, log_file=f'log_{args.local_rank}.txt')
         tb_writer = None
 
     if args.local_rank == 0:
         torch.distributed.barrier()
 
     try:
-        train(args, log, tb_writer)
+        train(args, logger, tb_writer)
     except:
-        log.exception('An error occured...')
+        logger.exception('An error occured...')
 
     if tb_writer is not None:
         tb_writer.close()
