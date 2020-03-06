@@ -1,53 +1,50 @@
+from abc import ABC, ABCMeta
+
 import pandas as pd
 import torch
 import torch.utils.data as data
 from transformers import RobertaTokenizer
 
-roberta_tokenizer = RobertaTokenizer('vocabs/roberta-large-vocab.json',
-                                     'vocabs/roberta-large-merges.txt',
-                                     additional_special_tokens=['<gap>'],
-                                     do_basic_tokenize=False)
 
-tokenizers = {
-    'roberta': roberta_tokenizer
-}
-
-special_tokens = {
-    'roberta': ['<s>', '<pad>', '</s>', '<unk>', '<mask>', '<gap>']
-}
-
-special_token_ids = {
-    'roberta': tokenizers['roberta'].convert_tokens_to_ids(special_tokens['roberta'])
-}
-
-gap_tokens = {
-    'roberta': '<gap>'
-}
-
-pad_tokens = {
-    'roberta': '<pad>'
-}
-
-gap_token_ids = {
-    'roberta': tokenizers['roberta'].convert_tokens_to_ids(['<gap>'])[0]
-}
-
-pad_token_ids = {
-    'roberta': tokenizers['roberta'].convert_tokens_to_ids(['<pad>'])[0]
-}
-
-fragment_transforms = {
-    'roberta': lambda fragment: ['<s>'] + fragment.split() + ['</s>', '</s>']
-}
-
-text_transforms = {
-    'roberta': lambda text: text.split() + ['</s>']
-}
+tokenizer = RobertaTokenizer('vocabs/roberta-large-vocab.json',
+                             'vocabs/roberta-large-merges.txt',
+                             additional_special_tokens=['<gap>'])
 
 
-class Dataset(data.Dataset):
+gap_token_id = tokenizer.convert_tokens_to_ids(['<gap>'])[0]
+pad_token_id = tokenizer.convert_tokens_to_ids(['<pad>'])[0]
+
+
+def fragment_transform(fragment):
+    return ['<s>'] + fragment.split() + ['</s>', '</s>']
+
+
+def text_transform(text):
+    return text.split() + ['</s>']
+
+
+class DatasetRegistry(ABCMeta):
+    registry = {}
+
+    def __new__(mcs, name, bases, attrs):
+        new_cls = ABCMeta.__new__(mcs, name, bases, attrs)
+        mcs.registry[new_cls.task] = new_cls
+        return new_cls
+
+    @classmethod
+    def get_dataset(mcs, task):
+        return mcs.registry[task]
+
+
+class BaseDataset(ABC, data.Dataset, metaclass=DatasetRegistry):
+    task = None
+
+
+class DatasetForGappedText(BaseDataset):
+    task = 'GT'
+
     def __init__(self, data_path, num_fragments=8):
-        super(Dataset, self).__init__()
+        super(DatasetForGappedText, self).__init__()
         self.num_fragments = num_fragments
         self.data = dict()
         self.data['text'] = list(pd.read_csv(data_path, usecols=['text'], squeeze=True,
@@ -82,33 +79,25 @@ def pad_2d(array_2d, pad_value=0):
 
 
 def collate_fn(batch):
-    model_type = 'roberta'
-
     input_ids = []
-    token_type_ids = []
     attention_mask = []
-    word_mask = []
     gap_ids = []
     target_gaps = []
 
     for text, fragment, target_gap in batch:
-        text_sequence = text_transforms[model_type](text)
-        text_sequence = tokenizers[model_type].convert_tokens_to_ids(text_sequence)
-        fragment_sequence = fragment_transforms[model_type](fragment)
-        fragment_sequence = tokenizers[model_type].convert_tokens_to_ids(fragment_sequence)
+        text_sequence = text_transform(text)
+        text_sequence = tokenizer.convert_tokens_to_ids(text_sequence)
+        fragment_sequence = fragment_transform(fragment)
+        fragment_sequence = tokenizer.convert_tokens_to_ids(fragment_sequence)
         full_sequence = fragment_sequence + text_sequence
         input_ids.append(full_sequence)
-        token_type_ids.append([0 for _ in range(len(fragment_sequence))] + [1 for _ in range(len(text_sequence))])
         attention_mask.append([1 for _ in full_sequence])
-        word_mask.append([1 if idx not in special_token_ids[model_type] else 0 for idx in full_sequence])
-        gap_ids.append([i for i in range(len(full_sequence)) if full_sequence[i] == gap_token_ids[model_type]])
+        gap_ids.append([i for i in range(len(full_sequence)) if full_sequence[i] == gap_token_id])
         target_gaps.append(target_gap)
 
-    input_ids = torch.tensor(pad_2d(input_ids, pad_value=pad_token_ids[model_type]))
-    token_type_ids = torch.tensor(pad_2d(token_type_ids, pad_value=1))
+    input_ids = torch.tensor(pad_2d(input_ids, pad_value=pad_token_id))
     attention_mask = torch.tensor(pad_2d(attention_mask))
-    word_mask = torch.tensor(pad_2d(word_mask))
     gap_ids = torch.tensor(gap_ids)
     target_gaps = torch.tensor(target_gaps)
 
-    return input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps
+    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'gap_ids': gap_ids, 'target_gaps': target_gaps}

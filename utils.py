@@ -71,19 +71,19 @@ class CheckpointSaver:
     """
     Adapted from https://github.com/chrischute/squad.
     """
-    def __init__(self, save_dir, max_checkpoints, metric_name,
-                 maximize_metric=False, logger=None):
+    def __init__(self, save_dir, max_checkpoints, primary_metric,
+                 maximize_metric=True, logger=None):
         super(CheckpointSaver, self).__init__()
 
         self.save_dir = save_dir
         self.max_checkpoints = max_checkpoints
-        self.metric_name = metric_name
+        self.primary_metric = primary_metric
         self.maximize_metric = maximize_metric
         self.best_val = None
         self.ckpt_paths = queue.PriorityQueue()
         self.logger = logger
-        self._print('Saver will {}imize {}...'
-                    .format('max' if maximize_metric else 'min', metric_name))
+        self._print('Saver will {}imize {}.'
+                    .format('max' if maximize_metric else 'min', primary_metric))
 
     def is_best(self, metric_val):
         """Check whether `metric_val` is the best seen so far.
@@ -107,9 +107,12 @@ class CheckpointSaver:
         if self.logger is not None:
             self.logger.info(message)
 
-    def save(self, step, model, args, metric_val, optimizer=None):
+    def save(self, model, step, eval_results, optimizer=None):
+        self._print('Saving model...')
         if hasattr(model, 'module'):
             model = model.module
+
+        metric_val = eval_results[self.primary_metric]
 
         checkpoint_path = os.path.join(self.save_dir,
                                        'step_{}.pth.tar'.format(step))
@@ -123,7 +126,7 @@ class CheckpointSaver:
         shutil.copy(checkpoint_path, last_path)
         if optimizer is not None:
             shutil.copy(checkpoint_path + '.optim', last_path + '.optim')
-        self._print('{} is now checkpoint from step {}...'.format(last_path, step))
+        self._print('{} is now checkpoint from step {}.'.format(last_path, step))
 
         if self.is_best(metric_val):
             # Save the best model
@@ -132,7 +135,8 @@ class CheckpointSaver:
             shutil.copy(checkpoint_path, best_path)
             if optimizer is not None:
                 shutil.copy(checkpoint_path + '.optim', best_path + '.optim')
-            self._print('New best checkpoint at step {}...'.format(step))
+            self._print('New best checkpoint!')
+            self._print('{} is now checkpoint from step {}.'.format(best_path, step))
 
         # Add checkpoint path to priority queue (lowest priority removed first)
         if self.maximize_metric:

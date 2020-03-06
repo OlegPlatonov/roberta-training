@@ -1,3 +1,5 @@
+from abc import ABC, ABCMeta
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +7,23 @@ import torch.nn.functional as F
 from transformers.modeling_roberta import RobertaModel, ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
 from transformers.configuration_roberta import RobertaConfig
 from transformers.modeling_bert import BertPreTrainedModel
+
+
+class ModelRegistry(ABCMeta):
+    registry = {}
+
+    def __new__(mcs, name, bases, attrs):
+        new_cls = ABCMeta.__new__(mcs, name, bases, attrs)
+        mcs.registry[new_cls.task] = new_cls
+        return new_cls
+
+    @classmethod
+    def get_model(mcs, task):
+        return mcs.registry[task]
+
+
+class BaseModel(ABC, BertPreTrainedModel, metaclass=ModelRegistry):
+    task = None
 
 
 class GTHead(nn.Module):
@@ -25,10 +44,11 @@ class GTHead(nn.Module):
         return gap_scores
 
 
-class RobertaForGappedText(BertPreTrainedModel):
+class RobertaForGappedText(BaseModel):
     config_class = RobertaConfig
     pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
     base_model_prefix = 'roberta'
+    task = 'GT'
 
     def __init__(self, config):
         super(RobertaForGappedText, self).__init__(config)
@@ -58,6 +78,8 @@ class RobertaForGappedText(BertPreTrainedModel):
 
         if target_gaps is not None:
             loss = F.cross_entropy(input=gap_scores, target=target_gaps)
-            outputs = (loss,) + outputs
+
+            all_losses = {'Loss': loss.item()}
+            outputs = (loss, all_losses) + outputs
 
         return outputs

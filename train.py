@@ -11,7 +11,7 @@ import os
 import json
 import yaml
 from argparse import ArgumentParser
-from collections import OrderedDict
+from collections import defaultdict
 
 from tqdm import tqdm
 try:
@@ -19,9 +19,10 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
-from models import RobertaForGappedText
-from datasets import Dataset, collate_fn
-from utils import CheckpointSaver, AverageMeter, get_logger, get_save_dir, get_num_data_samples
+from models import ModelRegistry
+from datasets import DatasetRegistry, collate_fn
+from evaluation import EvaluatorRegistry
+from utils import CheckpointSaver, get_logger, get_save_dir, get_num_data_samples
 
 
 def get_args():
@@ -34,6 +35,11 @@ def get_args():
                         type=str,
                         default='roberta-base',
                         help='Pretrained model name or path.')
+    parser.add_argument('--task',
+                        type=str,
+                        default='GT',
+                        choices=['GT'],
+                        help='Training task name.')
     parser.add_argument('--save_dir',
                         type=str,
                         default='./experiments',
@@ -135,8 +141,8 @@ def train(args, logger, tb_writer):
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
-    logger.info(f'Loading model {args.model}...')
-    model = RobertaForGappedText.from_pretrained(args.model)
+    logger.info(f'Loading model {args.model} for task {args.task}...')
+    model = ModelRegistry.get_model(args.task).from_pretrained(args.model)
 
     if args.local_rank in [-1, 0]:
         with open(os.path.join(args.save_dir, 'config.json'), 'w') as file:
@@ -146,13 +152,6 @@ def train(args, logger, tb_writer):
         torch.distributed.barrier()
 
     model.to(device)
-
-    # Get saver
-    saver = CheckpointSaver(args.save_dir,
-                            max_checkpoints=args.max_checkpoints,
-                            metric_name='Accuracy',
-                            maximize_metric=True,
-                            logger=logger)
 
     # Get optimizer
     logger.info('Creating optimizer...')
@@ -185,13 +184,27 @@ def train(args, logger, tb_writer):
     # Get dev data loader
     dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
     logger.info(f'Creating dev dataset from {dev_data_file}...')
-    dev_dataset = Dataset(dev_data_file)
+    dev_dataset = DatasetRegistry.get_dataset(args.task)(dev_data_file)
     dev_sampler = sampler(dev_dataset)
     dev_loader = DataLoader(dev_dataset,
-                            batch_size=args.batch_size,
+                            batch_size=2 * args.batch_size,
                             sampler=dev_sampler,
                             num_workers=args.num_workers,
                             collate_fn=collate_fn)
+
+    # Get evaluator
+    evaluator = EvaluatorRegistry.get_evaluator(args.task)(data_loader=dev_loader,
+                                                           logger=logger,
+                                                           tb_writer=tb_writer,
+                                                           device=device,
+                                                           world_size=world_size,
+                                                           args=args)
+
+    # Get saver
+    saver = CheckpointSaver(save_dir=args.save_dir,
+                            max_checkpoints=args.max_checkpoints,
+                            primary_metric=evaluator.primary_metric,
+                            logger=logger)
 
     global_step = 0
     samples_processed = 0
@@ -207,7 +220,7 @@ def train(args, logger, tb_writer):
         train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
         train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
         logger.info(f'Creating training dataset from {train_data_file}...')
-        train_dataset = Dataset(train_data_file)
+        train_dataset = DatasetRegistry.get_dataset(args.task)(train_data_file)
         train_sampler = sampler(train_dataset)
         train_loader = DataLoader(train_dataset,
                                   batch_size=args.batch_size,
@@ -221,26 +234,20 @@ def train(args, logger, tb_writer):
         logger.info(f'Starting epoch {epoch}...')
         model.train()
         model.zero_grad()
-        loss_val = 0
-        with torch.enable_grad(), \
-             tqdm(total=len(train_loader.dataset), disable=args.local_rank not in [-1, 0]) as progress_bar:
+        loss_values = defaultdict(float)
+        with torch.enable_grad(), tqdm(total=len(train_loader.dataset),
+                                       disable=args.local_rank not in [-1, 0]) as progress_bar:
+
             for step, batch in enumerate(train_loader, 1):
-                batch = tuple(x.to(device) for x in batch)
+                batch = {name: tensor.to(device) for name, tensor in batch.items()}
+                current_batch_size = batch['input_ids'].shape[0]
 
-                input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
-                outputs = model(input_ids=input_ids,
-                                attention_mask=attention_mask,
-                                gap_ids=gap_ids,
-                                target_gaps=target_gaps)
+                outputs = model(**batch)
+                loss, current_loss_values = outputs[:2]
 
-                current_batch_size = input_ids.shape[0]
-
-                loss = outputs[0]
-
-                if args.accumulation_steps > 1:
-                    loss = loss / args.accumulation_steps
-
-                loss_val += loss.item()
+                loss = loss / args.accumulation_steps
+                for name, value in current_loss_values.items():
+                    loss_values[name] += value / args.accumulation_steps
 
                 if args.fp16:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -265,11 +272,12 @@ def train(args, logger, tb_writer):
 
                     # Log info
                     current_lr = scheduler.get_lr()[0]
-                    progress_bar.set_postfix(epoch=epoch, loss=loss_val, step=global_step, lr=current_lr)
+                    progress_bar.set_postfix(epoch=epoch, step=global_step, lr=current_lr, **loss_values)
                     if args.local_rank in [-1, 0]:
-                        tb_writer.add_scalar('train/Loss', loss_val, global_step)
                         tb_writer.add_scalar('train/LR', current_lr, global_step)
-                    loss_val = 0
+                        for name, value in loss_values.items():
+                            tb_writer.add_scalar(f'train/{name}', value, global_step)
+                    loss_values = {name: 0 for name in loss_values}
 
                     if global_step == args.max_steps:
                         logger.info('Reached maximum number of optimization steps.')
@@ -277,89 +285,14 @@ def train(args, logger, tb_writer):
 
                     if samples_till_eval <= 0:
                         samples_till_eval = args.eval_every
-                        evaluate_and_save(model=model,
-                                          data_loader=dev_loader,
-                                          device=device,
-                                          tb_writer=tb_writer,
-                                          logger=logger,
-                                          global_step=global_step,
-                                          saver=saver,
-                                          args=args)
+                        eval_results = evaluator.evaluate(model, global_step)
+                        if args.local_rank in [-1, 0]:
+                            saver.save(model, global_step, eval_results)
 
             if args.eval_after_epoch:
-                evaluate_and_save(model=model,
-                                  data_loader=dev_loader,
-                                  device=device,
-                                  tb_writer=tb_writer,
-                                  logger=logger,
-                                  global_step=global_step,
-                                  saver=saver,
-                                  args=args)
-
-
-def evaluate_and_save(model, data_loader, device, tb_writer, logger, global_step, saver, args):
-    logger.info('Evaluating...')
-    results = evaluate(model, data_loader, device)
-
-    results_str = ', '.join('{}: {:05.2f}'.format(k, v)
-                            for k, v in results.items())
-    logger.info('Dev {}'.format(results_str))
-
-    if args.local_rank in [-1, 0]:
-        logger.info('Visualizing in TensorBoard...')
-        for k, v in results.items():
-            tb_writer.add_scalar('dev/{}'.format(k), v, global_step)
-
-        logger.info('Saving checkpoint at step {}...'.format(global_step))
-        saver.save(step=global_step,
-                   model=model,
-                   args=args,
-                   metric_val=results['Accuracy'])
-
-
-def evaluate(model, data_loader, device):
-    loss_meter = AverageMeter()
-    world_size = torch.distributed.get_world_size() if args.local_rank != -1 else 1
-
-    model.eval()
-    correct_preds = 0
-    correct_avna = 0
-    zero_preds = 0
-    total_preds = 0
-    with torch.no_grad(), tqdm(total=len(data_loader.dataset), disable=args.local_rank not in [-1, 0]) as progress_bar:
-        for batch in data_loader:
-            batch = tuple(x.to(device) for x in batch)
-            input_ids, token_type_ids, attention_mask, word_mask, gap_ids, target_gaps = batch
-            current_batch_size = input_ids.shape[0]
-
-            outputs = model(input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            gap_ids=gap_ids,
-                            target_gaps=target_gaps)
-
-            loss, gap_scores = outputs[:2]
-            loss_meter.update(loss.item(), current_batch_size)
-
-            preds = torch.argmax(gap_scores, dim=1)
-            correct_preds += torch.sum(preds == target_gaps).item()
-            correct_avna += torch.sum((preds > 0) == (target_gaps > 0)).item()
-            zero_preds += torch.sum(preds == 0).item()
-            total_preds += current_batch_size
-
-            # Log info
-            progress_bar.update(current_batch_size * world_size)
-            progress_bar.set_postfix(loss=loss_meter.avg)
-
-    model.train()
-
-    results_list = [('Loss', loss_meter.avg),
-                    ('Accuracy', correct_preds / total_preds),
-                    ('AvNA', correct_avna / total_preds),
-                    ('NA_share', zero_preds / total_preds)]
-
-    results = OrderedDict(results_list)
-
-    return results
+                eval_results = evaluator.evaluate(model, global_step)
+                if args.local_rank in [-1, 0]:
+                    saver.save(model, global_step, eval_results)
 
 
 if __name__ == '__main__':
