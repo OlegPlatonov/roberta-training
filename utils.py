@@ -115,14 +115,14 @@ class CheckpointSaver:
         metric_val = eval_results[self.primary_metric]
 
         checkpoint_path = os.path.join(self.save_dir,
-                                       'step_{}.pth.tar'.format(step))
+                                       'model_step_{}.bin'.format(step))
         torch.save(model.state_dict(), checkpoint_path)
         if optimizer is not None:
             torch.save(optimizer.state_dict(), checkpoint_path + '.optim')
         self._print('Saved checkpoint: {}'.format(checkpoint_path))
 
         # Last checkpoint
-        last_path = os.path.join(self.save_dir, 'last.pth.tar')
+        last_path = os.path.join(self.save_dir, 'model_last.bin')
         shutil.copy(checkpoint_path, last_path)
         if optimizer is not None:
             shutil.copy(checkpoint_path + '.optim', last_path + '.optim')
@@ -131,7 +131,7 @@ class CheckpointSaver:
         if self.is_best(metric_val):
             # Save the best model
             self.best_val = metric_val
-            best_path = os.path.join(self.save_dir, 'best.pth.tar')
+            best_path = os.path.join(self.save_dir, 'model_best.bin')
             shutil.copy(checkpoint_path, best_path)
             if optimizer is not None:
                 shutil.copy(checkpoint_path + '.optim', best_path + '.optim')
