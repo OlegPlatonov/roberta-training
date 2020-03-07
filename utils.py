@@ -159,34 +159,30 @@ class CheckpointSaver:
                 pass
 
 
-def get_num_data_samples(data_folder, num_epochs, logger=None):
-    """
-    Adapted from https://github.com/huggingface/transformers.
-    """
+def get_data_sizes(data_dir, num_epochs, logger=None):
+    num_train_samples_per_epoch = []
+    config_file = os.path.join(data_dir, f'data_config.yaml')
+    with open(config_file, 'r') as file:
+        config = yaml.safe_load(file)
+        num_dev_samples = config['dev_size']
+        for epoch in range(1, num_epochs + 1):
+            if f'epoch_{epoch}_size' in config:
+                num_train_samples_per_epoch.append(config[f'epoch_{epoch}_size'])
+            else:
+                break
 
-    num_data_samples = []
-    for i in range(1, num_epochs + 1):
-        data_file = os.path.join(data_folder, f'Epoch_{i}.csv')
-        config_file = os.path.join(data_folder, f'Epoch_{i}_config.yaml')
-        if os.path.isfile(data_file) and os.path.isfile(config_file):
-            with open(config_file, 'r') as file:
-                config = yaml.safe_load(file)
-            num_data_samples.append(config['size'])
-        else:
-            break
-
-    num_unique_data_epochs = len(num_data_samples)
+    num_unique_train_epochs = len(num_train_samples_per_epoch)
 
     if logger is not None:
-        logger.info(f'{num_unique_data_epochs} unique epochs of data found.')
+        logger.info(f'{num_unique_train_epochs} unique epochs of data found.')
 
-    for i in range(num_epochs - len(num_data_samples)):
-        num_data_samples.append(num_data_samples[i])
+    for i in range(num_epochs - len(num_train_samples_per_epoch)):
+        num_train_samples_per_epoch.append(num_train_samples_per_epoch[i])
 
     if logger is not None:
-        logger.info(f'Number of samples per epoch: {num_data_samples}')
+        logger.info(f'Number of samples per epoch: {num_train_samples_per_epoch}')
 
-    return num_data_samples, num_unique_data_epochs
+    return num_train_samples_per_epoch, num_dev_samples, num_unique_train_epochs
 
 
 class AverageMeter:

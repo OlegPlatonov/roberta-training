@@ -1,8 +1,7 @@
 import random
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler
-from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from transformers import AdamW, get_linear_schedule_with_warmup
 from apex import amp
@@ -20,9 +19,9 @@ except ImportError:
     from tensorboardX import SummaryWriter
 
 from models import ModelRegistry
-from datasets import DatasetRegistry, collate_fn
+from datasets import DatasetRegistry
 from evaluation import EvaluatorRegistry
-from utils import CheckpointSaver, get_logger, get_save_dir, get_num_data_samples
+from utils import CheckpointSaver, get_logger, get_save_dir, get_data_sizes
 
 
 def get_args():
@@ -78,10 +77,6 @@ def get_args():
                         type=float,
                         help='Proportion of training to perform linear learning rate warmup for. '
                              'E.g., 0.1 = 10% of training.')
-    parser.add_argument('--num_workers',
-                        type=int,
-                        default=4,
-                        help='Number of sub-processes to use for training data loader.')
     parser.add_argument('--max_checkpoints',
                         type=int,
                         default=30)
@@ -124,8 +119,11 @@ def train(args, logger, tb_writer):
     logger.info(f'Total number of GPUs used: {world_size}.')
     logger.info(f'Effective batch size: {args.batch_size * world_size * args.accumulation_steps}.')
 
-    num_data_samples, num_unique_data_epochs = get_num_data_samples(args.data_dir, args.num_epochs, logger)
-    num_optimization_steps = sum(num_data_samples) // world_size // args.batch_size // args.accumulation_steps
+    num_train_samples_per_epoch, num_dev_samples, num_unique_train_epochs = get_data_sizes(data_dir=args.data_dir,
+                                                                                           num_epochs=args.num_epochs,
+                                                                                           logger=logger)
+    num_optimization_steps = sum(num_train_samples_per_epoch) // world_size // args.batch_size // \
+                             args.accumulation_steps
     if args.max_steps > 0:
         num_optimization_steps = min(num_optimization_steps, args.max_steps)
     logger.info(f'Total number of optimization steps: {num_optimization_steps}.')
@@ -179,18 +177,16 @@ def train(args, logger, tb_writer):
                                         output_device=args.local_rank,
                                         find_unused_parameters=True)
 
-    sampler = RandomSampler if args.local_rank == -1 else DistributedSampler
-
     # Get dev data loader
-    dev_data_file = os.path.join(args.data_dir, f'Dev.csv')
+    dev_data_file = os.path.join(args.data_dir, f'dev.jsonl.gz')
     logger.info(f'Creating dev dataset from {dev_data_file}...')
-    dev_dataset = DatasetRegistry.get_dataset(args.task)(dev_data_file)
-    dev_sampler = sampler(dev_dataset)
+    dev_dataset = DatasetRegistry.get_dataset(args.task)(data_file=dev_data_file,
+                                                         size=num_dev_samples,
+                                                         local_rank=-1)
     dev_loader = DataLoader(dev_dataset,
                             batch_size=2 * args.batch_size,
-                            sampler=dev_sampler,
-                            num_workers=args.num_workers,
-                            collate_fn=collate_fn)
+                            num_workers=1,
+                            collate_fn=dev_dataset.collate_fn)
 
     # Get evaluator
     evaluator = EvaluatorRegistry.get_evaluator(args.task)(data_loader=dev_loader,
@@ -217,16 +213,17 @@ def train(args, logger, tb_writer):
             torch.distributed.barrier()
 
         # Get train data loader for current epoch
-        train_data_file_num = ((epoch - 1) % num_unique_data_epochs) + 1
-        train_data_file = os.path.join(args.data_dir, f'Epoch_{train_data_file_num}.csv')
+        train_data_file_num = ((epoch - 1) % num_unique_train_epochs) + 1
+        train_data_file = os.path.join(args.data_dir, f'epoch_{train_data_file_num}.jsonl.gz')
         logger.info(f'Creating training dataset from {train_data_file}...')
-        train_dataset = DatasetRegistry.get_dataset(args.task)(train_data_file)
-        train_sampler = sampler(train_dataset)
+        train_dataset = DatasetRegistry.get_dataset(args.task)(train_data_file,
+                                                               size=num_train_samples_per_epoch[epoch - 1],
+                                                               local_rank=args.local_rank,
+                                                               world_size=world_size)
         train_loader = DataLoader(train_dataset,
                                   batch_size=args.batch_size,
-                                  sampler=train_sampler,
-                                  num_workers=args.num_workers,
-                                  collate_fn=collate_fn)
+                                  num_workers=1,
+                                  collate_fn=train_dataset.collate_fn)
 
         if args.local_rank != -1:
             torch.distributed.barrier()
