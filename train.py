@@ -37,7 +37,7 @@ def get_args():
     parser.add_argument('--task',
                         type=str,
                         default='GT',
-                        choices=['GT'],
+                        choices=['GT', 'QA'],
                         help='Training task name.')
     parser.add_argument('--save_dir',
                         type=str,
@@ -234,7 +234,6 @@ def train(args, logger, tb_writer):
         loss_values = defaultdict(float)
         with torch.enable_grad(), tqdm(total=len(train_loader.dataset),
                                        disable=args.local_rank not in [-1, 0]) as progress_bar:
-
             for step, batch in enumerate(train_loader, 1):
                 batch = {name: tensor.to(device) for name, tensor in batch.items()}
                 current_batch_size = batch['input_ids'].shape[0]
