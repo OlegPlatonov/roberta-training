@@ -1,10 +1,10 @@
 import os
 import logging
 import queue
-import torch
 import tqdm
 import shutil
 import yaml
+import torch
 
 
 def get_logger(log_dir, name, verbose=True, log_file='log.txt'):
@@ -82,15 +82,9 @@ class CheckpointSaver:
         self.best_val = None
         self.ckpt_paths = queue.PriorityQueue()
         self.logger = logger
-        self._print('Saver will {}imize {}.'
-                    .format('max' if maximize_metric else 'min', primary_metric))
+        self._print(f'Saver will {"max" if maximize_metric else "min"}imize {primary_metric}.')
 
     def is_best(self, metric_val):
-        """Check whether `metric_val` is the best seen so far.
-
-        Args:
-            metric_val (float): Metric value to compare to prior checkpoints.
-        """
         if metric_val is None:
             # No metric reported
             return False
@@ -103,7 +97,6 @@ class CheckpointSaver:
                 or (not self.maximize_metric and self.best_val > metric_val))
 
     def _print(self, message):
-        """Print a message if logging is enabled."""
         if self.logger is not None:
             self.logger.info(message)
 
@@ -114,19 +107,18 @@ class CheckpointSaver:
 
         metric_val = eval_results[self.primary_metric]
 
-        checkpoint_path = os.path.join(self.save_dir,
-                                       'model_step_{}.bin'.format(step))
+        checkpoint_path = os.path.join(self.save_dir, f'model_step_{step}.bin')
         torch.save(model.state_dict(), checkpoint_path)
         if optimizer is not None:
             torch.save(optimizer.state_dict(), checkpoint_path + '.optim')
-        self._print('Saved checkpoint: {}'.format(checkpoint_path))
+        self._print(f'Saved checkpoint: {checkpoint_path}')
 
         # Last checkpoint
         last_path = os.path.join(self.save_dir, 'model_last.bin')
         shutil.copy(checkpoint_path, last_path)
         if optimizer is not None:
             shutil.copy(checkpoint_path + '.optim', last_path + '.optim')
-        self._print('{} is now checkpoint from step {}.'.format(last_path, step))
+        self._print(f'{last_path} is now checkpoint from step {step}.')
 
         if self.is_best(metric_val):
             # Save the best model
@@ -136,7 +128,7 @@ class CheckpointSaver:
             if optimizer is not None:
                 shutil.copy(checkpoint_path + '.optim', best_path + '.optim')
             self._print('New best checkpoint!')
-            self._print('{} is now checkpoint from step {}.'.format(best_path, step))
+            self._print(f'{best_path} is now checkpoint from step {step}.')
 
         # Add checkpoint path to priority queue (lowest priority removed first)
         if self.maximize_metric:
@@ -153,10 +145,46 @@ class CheckpointSaver:
                 os.remove(worst_ckpt)
                 if optimizer is not None:
                     os.remove(worst_ckpt + '.optim')
-                self._print('Removed checkpoint: {}'.format(worst_ckpt))
+                self._print(f'Removed checkpoint: {worst_ckpt}')
             except OSError:
                 # Avoid crashing if checkpoint has been removed or protected
                 pass
+
+
+class AverageMeter:
+    """
+    Taken from https://github.com/chrischute/squad.
+    """
+    def __init__(self):
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def reset(self):
+        self.__init__()
+
+    def update(self, val, num_samples=1):
+        self.count += num_samples
+        self.sum += val * num_samples
+        self.avg = self.sum / self.count
+
+
+def get_save_dir(base_dir, name, subdir='train', id_max=100, use_existing_dir=False):
+    """
+    Adapted from https://github.com/chrischute/squad.
+    """
+    for uid in range(1, id_max):
+        save_dir = os.path.join(base_dir, subdir, f'{name}_{uid:02d}')
+        if not os.path.exists(save_dir):
+            if not use_existing_dir:
+                os.makedirs(save_dir)
+                return save_dir
+            else:
+                save_dir = os.path.join(base_dir, subdir, f'{name}_{uid - 1:02d}')
+                return save_dir
+
+    raise RuntimeError('Too many save directories created with the same name. \
+                       Delete old save directories or use another name.')
 
 
 def get_data_sizes(data_dir, num_epochs, logger=None):
@@ -183,40 +211,3 @@ def get_data_sizes(data_dir, num_epochs, logger=None):
         logger.info(f'Number of samples per epoch: {num_train_samples_per_epoch}')
 
     return num_train_samples_per_epoch, num_dev_samples, num_unique_train_epochs
-
-
-class AverageMeter:
-    """
-    Taken from https://github.com/chrischute/squad.
-    """
-    def __init__(self):
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def reset(self):
-        self.__init__()
-
-    def update(self, val, num_samples=1):
-        self.count += num_samples
-        self.sum += val * num_samples
-        self.avg = self.sum / self.count
-
-
-def get_save_dir(base_dir, name, training, id_max=100, use_existing_dir=False):
-    """
-    Adapted from https://github.com/chrischute/squad.
-    """
-    for uid in range(1, id_max):
-        subdir = 'train' if training else 'test'
-        save_dir = os.path.join(base_dir, subdir, '{}-{:02d}'.format(name, uid))
-        if not os.path.exists(save_dir):
-            if not use_existing_dir:
-                os.makedirs(save_dir)
-                return save_dir
-            else:
-                save_dir = os.path.join(base_dir, subdir, '{}-{:02d}'.format(name, uid - 1))
-                return save_dir
-
-    raise RuntimeError('Too many save directories created with the same name. \
-                       Delete old save directories or use another name.')

@@ -117,7 +117,8 @@ def train(args, logger, tb_writer):
 
     world_size = torch.distributed.get_world_size() if args.local_rank != -1 else 1
     logger.info(f'Total number of GPUs used: {world_size}.')
-    logger.info(f'Effective batch size: {args.batch_size * world_size * args.accumulation_steps}.')
+    effective_batch_size = args.batch_size * world_size * args.accumulation_steps
+    logger.info(f'Effective batch size: {effective_batch_size}.')
 
     num_train_samples_per_epoch, num_dev_samples, num_unique_train_epochs = get_data_sizes(data_dir=args.data_dir,
                                                                                            num_epochs=args.num_epochs,
@@ -181,7 +182,7 @@ def train(args, logger, tb_writer):
     dev_data_file = os.path.join(args.data_dir, f'dev.jsonl.gz')
     logger.info(f'Creating dev dataset from {dev_data_file}...')
     dev_dataset = DatasetRegistry.get_dataset(args.task)(data_file=dev_data_file,
-                                                         size=num_dev_samples,
+                                                         data_size=num_dev_samples,
                                                          local_rank=-1)
     dev_loader = DataLoader(dev_dataset,
                             batch_size=2 * args.batch_size,
@@ -209,15 +210,12 @@ def train(args, logger, tb_writer):
     logger.info('Training...')
     samples_till_eval = args.eval_every
     for epoch in range(1, args.num_epochs + 1):
-        if args.local_rank != -1:
-            torch.distributed.barrier()
-
         # Get train data loader for current epoch
         train_data_file_num = ((epoch - 1) % num_unique_train_epochs) + 1
         train_data_file = os.path.join(args.data_dir, f'epoch_{train_data_file_num}.jsonl.gz')
         logger.info(f'Creating training dataset from {train_data_file}...')
         train_dataset = DatasetRegistry.get_dataset(args.task)(train_data_file,
-                                                               size=num_train_samples_per_epoch[epoch - 1],
+                                                               data_size=num_train_samples_per_epoch[epoch - 1],
                                                                local_rank=args.local_rank,
                                                                world_size=world_size)
         train_loader = DataLoader(train_dataset,
@@ -225,14 +223,12 @@ def train(args, logger, tb_writer):
                                   num_workers=1,
                                   collate_fn=train_dataset.collate_fn)
 
-        if args.local_rank != -1:
-            torch.distributed.barrier()
-
         logger.info(f'Starting epoch {epoch}...')
         model.train()
         model.zero_grad()
         loss_values = defaultdict(float)
-        with torch.enable_grad(), tqdm(total=len(train_loader.dataset),
+        samples_till_end = (num_optimization_steps - global_step) * effective_batch_size
+        with torch.enable_grad(), tqdm(total=min([len(train_loader.dataset), samples_till_end]),
                                        disable=args.local_rank not in [-1, 0]) as progress_bar:
             for step, batch in enumerate(train_loader, 1):
                 batch = {name: tensor.to(device) for name, tensor in batch.items()}
@@ -299,13 +295,13 @@ if __name__ == '__main__':
         torch.distributed.init_process_group(backend='nccl')
 
     if args.local_rank in [-1, 0]:
-        args.save_dir = get_save_dir(args.save_dir, args.name, training=True)
+        args.save_dir = get_save_dir(args.save_dir, args.name)
         logger = get_logger(args.save_dir, args.name, log_file=f'log_0.txt')
         logger.info(f'Results will be saved to {args.save_dir}.')
         tb_writer = SummaryWriter(args.save_dir)
     else:
         torch.distributed.barrier()
-        args.save_dir = get_save_dir(args.save_dir, args.name, training=True, use_existing_dir=True)
+        args.save_dir = get_save_dir(args.save_dir, args.name, use_existing_dir=True)
         logger = get_logger(args.save_dir, args.name, verbose=False, log_file=f'log_{args.local_rank}.txt')
         tb_writer = None
 
