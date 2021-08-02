@@ -28,6 +28,7 @@ def get_logger(log_dir, name, verbose=True, log_file='log.txt'):
 
     # Create logger
     logger = logging.getLogger(name)
+    logger.propagate = False
     logger.setLevel(logging.DEBUG)
 
     if verbose:
