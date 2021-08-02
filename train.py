@@ -39,8 +39,9 @@ def get_args():
     parser.add_argument('--task',
                         type=str,
                         default='GT',
-                        choices=['GT', 'QA'],
+                        choices=['MLM', 'GT', 'QA'],
                         help='Training task. The options are: '
+                             'MLM (Masked Language Modeling), '
                              'GT (Gapped Text), '
                              'QA (Question Answering).')
     parser.add_argument('--save_dir',
@@ -204,6 +205,7 @@ def train(args, logger, tb_writer):
     saver = CheckpointSaver(save_dir=args.save_dir,
                             max_checkpoints=args.max_checkpoints,
                             primary_metric=evaluator.primary_metric,
+                            maximize_metric=evaluator.maximize_metric,
                             logger=logger)
 
     global_step = 0

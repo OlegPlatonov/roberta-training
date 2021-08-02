@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers.modeling_roberta import RobertaModel, ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
+from transformers.modeling_roberta import RobertaModel, RobertaLMHead, ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
 from transformers.configuration_roberta import RobertaConfig
 from transformers.modeling_bert import BertPreTrainedModel
 
@@ -27,6 +27,39 @@ class BaseModel(ABC, BertPreTrainedModel, metaclass=ModelRegistry):
     config_class = RobertaConfig
     pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
     base_model_prefix = 'roberta'
+
+
+class RobertaForMLM(BaseModel):
+    task = 'MLM'
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.roberta = RobertaModel(config)
+        self.lm_head = RobertaLMHead(config)
+
+        self.init_weights()
+
+    def forward(self, input_ids, attention_mask, mask_ids=None, mask_targets=None):
+        outputs = self.roberta(input_ids, attention_mask=attention_mask)
+        sequence_output = outputs[0]
+
+        if mask_ids is None:
+            all_logits = self.lm_head(sequence_output)
+            outputs = (all_logits,) + outputs[2:]
+            return outputs
+
+        mask_representations = sequence_output[mask_ids[:, 0], mask_ids[:, 1]]
+        mask_logits = self.lm_head(mask_representations)
+        outputs = (mask_logits,) + outputs[2:]
+
+        if mask_targets is None:
+            return outputs
+
+        loss = F.cross_entropy(input=mask_logits, target=mask_targets)
+        all_losses = {'Loss': loss.item()}
+        outputs = (loss, all_losses) + outputs
+
+        return outputs
 
 
 class RobertaForGT(BaseModel):

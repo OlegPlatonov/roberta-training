@@ -22,6 +22,7 @@ class EvaluatorRegistry(ABCMeta):
 class BaseEvaluator(ABC, metaclass=EvaluatorRegistry):
     task = None
     primary_metric = None
+    maximize_metric = True
 
     def __init__(self, data_loader, logger, tb_writer, device, world_size, args):
         self.data_loader = data_loader
@@ -78,9 +79,33 @@ class BaseEvaluator(ABC, metaclass=EvaluatorRegistry):
         pass
 
 
+class EvaluatorForMLM(BaseEvaluator):
+    task = 'MLM'
+    primary_metric = 'Loss'
+    maximize_metric = False
+
+    @staticmethod
+    def update_metrics(metrics, batch, outputs):
+        mask_logits = outputs[2]
+        preds = torch.argmax(mask_logits, dim=1)
+        mask_targets = batch['mask_targets']
+        metrics['correct_preds'] += torch.sum(preds == mask_targets).item()
+        metrics['total_preds'] += mask_targets.shape[0]
+
+    @staticmethod
+    def get_final_metrics(metrics, loss_meters):
+        results = OrderedDict([
+            ('Loss', loss_meters['Loss'].avg),
+            ('Accuracy', metrics['correct_preds'] / metrics['total_preds']),
+        ])
+
+        return results
+
+
 class EvaluatorForGT(BaseEvaluator):
     task = 'GT'
     primary_metric = 'Accuracy'
+    maximize_metric = True
 
     @staticmethod
     def update_metrics(metrics, batch, outputs):
@@ -107,6 +132,7 @@ class EvaluatorForGT(BaseEvaluator):
 class EvaluatorForQA(BaseEvaluator):
     task = 'QA'
     primary_metric = 'Exact_Match'
+    maximize_metric = True
 
     @staticmethod
     def update_metrics(metrics, batch, outputs):
