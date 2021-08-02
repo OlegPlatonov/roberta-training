@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import AdamW
 
 try:
     from apex import amp
@@ -22,7 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from models import ModelRegistry
 from datasets import DatasetRegistry
 from evaluation import EvaluatorRegistry
-from utils import CheckpointSaver, get_logger, get_save_dir, get_data_sizes, get_parameter_groups
+from utils import CheckpointSaver, get_logger, get_save_dir, get_data_sizes, get_parameter_groups, get_lr_scheduler
 
 
 def get_args():
@@ -169,9 +169,7 @@ def train(args, logger, tb_writer):
     logger.info('Creating optimizer...')
     parameter_groups = get_parameter_groups(model)
     optimizer = AdamW(parameter_groups, lr=args.learning_rate, weight_decay=args.weight_decay, eps=1e-8)
-    scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                num_training_steps=num_optimization_steps,
-                                                num_warmup_steps=int(num_optimization_steps * args.warmup_proportion))
+    scheduler = get_lr_scheduler(optimizer, num_steps=num_optimization_steps, warmup_proportion=args.warmup_proportion)
 
     if args.amp:
         amp.register_half_function(torch, 'einsum')
@@ -258,6 +256,8 @@ def train(args, logger, tb_writer):
                 progress_bar.update(current_batch_size * world_size)
 
                 if step % args.accumulation_steps == 0:
+                    current_lr = scheduler.get_last_lr()[0]
+
                     if args.amp:
                         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 1.0)
                     else:
@@ -269,7 +269,6 @@ def train(args, logger, tb_writer):
                     global_step += 1
 
                     # Log info
-                    current_lr = scheduler.get_last_lr()[0]
                     progress_bar.set_postfix(epoch=epoch, step=global_step, lr=current_lr, **loss_values)
                     if args.local_rank in [-1, 0]:
                         tb_writer.add_scalar('train/LR', current_lr, global_step)
