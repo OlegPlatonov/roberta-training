@@ -4,7 +4,11 @@ import torch
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from transformers import AdamW, get_linear_schedule_with_warmup
-from apex import amp
+
+try:
+    from apex import amp
+except ImportError:
+    pass
 
 import os
 import json
@@ -13,19 +17,17 @@ from argparse import ArgumentParser
 from collections import defaultdict
 
 from tqdm import tqdm
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:
-    from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 from models import ModelRegistry
 from datasets import DatasetRegistry
 from evaluation import EvaluatorRegistry
-from utils import CheckpointSaver, get_logger, get_save_dir, get_data_sizes
+from utils import CheckpointSaver, get_logger, get_save_dir, get_data_sizes, get_parameter_groups
 
 
 def get_args():
     parser = ArgumentParser()
+
     parser.add_argument('--name',
                         type=str,
                         required=True,
@@ -38,67 +40,78 @@ def get_args():
                         type=str,
                         default='GT',
                         choices=['GT', 'QA'],
-                        help='Training task name.')
+                        help='Training task. The options are: '
+                             'GT (Gapped Text), '
+                             'QA (Question Answering).')
     parser.add_argument('--save_dir',
                         type=str,
-                        default='./experiments',
+                        default='experiments',
                         help='Base directory for saving information.')
     parser.add_argument('--data_dir',
                         type=str,
-                        default='./data/GT')
-    parser.add_argument('--seed',
-                        type=int,
-                        default=12)
+                        default='data/GT',
+                        help='Directory with training and evaluation data.')
     parser.add_argument('--batch_size',
                         type=int,
                         default=8,
-                        help='This is the number of training samples processed together by one GPU. '
+                        help='This is the number of training samples processed simultaneously by one GPU. '
                              'The effective batch size (number of training samples processed per one '
                              'optimization step) is equal to batch_size * num_gpus * accumulation_steps.')
     parser.add_argument('--accumulation_steps',
                         type=int,
-                        default=1)
-    parser.add_argument('--fp16',
-                        type=lambda s: s.lower().startswith('t'),
+                        default=1,
+                        help='Number of gradient accumulation steps.')
+    parser.add_argument('--amp',
                         default=False,
-                        help='Whether to use 16-bit float precision instead of 32-bit')
+                        action='store_true',
+                        help='Use apex amp for mixed precision training.')
+    parser.add_argument('--amp_opt_level',
+                        type=str,
+                        default='O1',
+                        choices=['O0', 'O1', 'O2', 'O3'],
+                        help='Apex amp optimization level. Only used if amp is True.')
     parser.add_argument('--num_epochs',
                         type=int,
-                        default=1)
+                        default=1,
+                        help='Number of training epochs.')
     parser.add_argument('--max_steps',
                         type=int,
-                        default=-1)
+                        default=-1,
+                        help='Maximum number of training steps. '
+                             'Can be used to stop training before the end of an epoch.')
     parser.add_argument('--learning_rate',
+                        type=float,
                         default=1e-5,
-                        type=float,
-                        help='The initial learning rate for Adam.')
+                        help='Maximum learning rate for AdamW.')
     parser.add_argument('--warmup_proportion',
-                        default=0.1,
                         type=float,
-                        help='Proportion of training to perform linear learning rate warmup for. '
-                             'E.g., 0.1 = 10% of training.')
+                        default=0.1,
+                        help='Proportion of training steps to perform linear learning rate warmup for.')
     parser.add_argument('--max_checkpoints',
                         type=int,
-                        default=30)
+                        default=10,
+                        help='Maximum number of model and optimizer checkpoints to keep.')
     parser.add_argument('--eval_every',
                         type=int,
                         default=50000,
                         help='Evaluate model after processing this many training samples.')
-    parser.add_argument('--eval_after_epoch',
-                        type=lambda s: s.lower().startswith('t'),
-                        default=True,
-                        help='Whether to evaluate model at the end of every epoch.')
-    parser.add_argument('--apex_level',
-                        default='O1',
-                        choices=['O0', 'O1', 'O2', 'O3'],
-                        help='Apex optimization level. Only used if fp16 is True.')
-    parser.add_argument("--weight_decay",
-                        default=0.0,
-                        type=float)
-    parser.add_argument("--local_rank",
+    parser.add_argument('--do_not_eval_after_epoch',
+                        default=False,
+                        action='store_true',
+                        help='Do not evaluate model at the end of every epoch.')
+    parser.add_argument('--weight_decay',
+                        type=float,
+                        default=0,
+                        help='Regularization.')
+    parser.add_argument('--seed',
+                        type=int,
+                        default=111,
+                        help='Random seed.')
+    parser.add_argument('--local_rank',
                         type=int,
                         default=-1,
-                        help='Local rank for distributed training. Use -1 for single GPU training')
+                        help='Local rank for distributed training. '
+                             'This argument is provided by torch.distributed.launch.')
 
     args = parser.parse_args()
 
@@ -109,7 +122,7 @@ def train(args, logger, tb_writer):
     logger.info('Args: {}'.format(json.dumps(vars(args), indent=4, sort_keys=True)))
     if args.local_rank in [-1, 0]:
         with open(os.path.join(args.save_dir, 'args.yaml'), 'w') as file:
-            yaml.dump(vars(args), file)
+            yaml.safe_dump(vars(args), file, sort_keys=False)
 
     device_id = args.local_rank if args.local_rank != -1 else 0
     device = torch.device('cuda', device_id)
@@ -154,23 +167,15 @@ def train(args, logger, tb_writer):
 
     # Get optimizer
     logger.info('Creating optimizer...')
-    no_decay = ['bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {
-            'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            'weight_decay': args.weight_decay,
-        },
-        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
-    ]
-
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=1e-8)
+    parameter_groups = get_parameter_groups(model)
+    optimizer = AdamW(parameter_groups, lr=args.learning_rate, weight_decay=args.weight_decay, eps=1e-8)
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_training_steps=num_optimization_steps,
-                                                num_warmup_steps=num_optimization_steps * args.warmup_proportion)
+                                                num_warmup_steps=int(num_optimization_steps * args.warmup_proportion))
 
-    if args.fp16:
+    if args.amp:
         amp.register_half_function(torch, 'einsum')
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.apex_level)
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp_opt_level)
 
     if args.local_rank != -1:
         model = DistributedDataParallel(model,
@@ -228,8 +233,9 @@ def train(args, logger, tb_writer):
         model.zero_grad()
         loss_values = defaultdict(float)
         samples_till_end = (num_optimization_steps - global_step) * effective_batch_size
-        with torch.enable_grad(), tqdm(total=min([len(train_loader.dataset), samples_till_end]),
-                                       disable=args.local_rank not in [-1, 0]) as progress_bar:
+        samples_in_cur_epoch = min([len(train_loader.dataset), samples_till_end])
+        disable_progress_bar = (args.local_rank not in [-1, 0])
+        with tqdm(total=samples_in_cur_epoch, disable=disable_progress_bar) as progress_bar:
             for step, batch in enumerate(train_loader, 1):
                 batch = {name: tensor.to(device) for name, tensor in batch.items()}
                 current_batch_size = batch['input_ids'].shape[0]
@@ -241,7 +247,7 @@ def train(args, logger, tb_writer):
                 for name, value in current_loss_values.items():
                     loss_values[name] += value / args.accumulation_steps
 
-                if args.fp16:
+                if args.amp:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
@@ -252,7 +258,7 @@ def train(args, logger, tb_writer):
                 progress_bar.update(current_batch_size * world_size)
 
                 if step % args.accumulation_steps == 0:
-                    if args.fp16:
+                    if args.amp:
                         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), 1.0)
                     else:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -263,7 +269,7 @@ def train(args, logger, tb_writer):
                     global_step += 1
 
                     # Log info
-                    current_lr = scheduler.get_lr()[0]
+                    current_lr = scheduler.get_last_lr()[0]
                     progress_bar.set_postfix(epoch=epoch, step=global_step, lr=current_lr, **loss_values)
                     if args.local_rank in [-1, 0]:
                         tb_writer.add_scalar('train/LR', current_lr, global_step)
@@ -281,7 +287,7 @@ def train(args, logger, tb_writer):
                         if args.local_rank in [-1, 0]:
                             saver.save(model, global_step, eval_results)
 
-            if args.eval_after_epoch:
+            if not args.do_not_eval_after_epoch:
                 eval_results = evaluator.evaluate(model, global_step)
                 if args.local_rank in [-1, 0]:
                     saver.save(model, global_step, eval_results)

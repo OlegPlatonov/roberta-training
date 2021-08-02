@@ -1,19 +1,14 @@
-name: GT
+name: roberta
 channels:
   - pytorch
-  - conda-forge
-  - defaults
 dependencies:
-  - python=3.7
+  - python=3.8
   - pip
-  - regex
-  - numpy
-  - pandas
   - tqdm
   - pyyaml
-  - yaml
-  - pathos
+  - numpy
+  - cudatoolkit=10.2
+  - pytorch=1.8.1
   - tensorboard
   - pip:
-    - torch==1.3
-    - spacy-nightly
+    - transformers==2.10

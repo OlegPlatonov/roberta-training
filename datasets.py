@@ -5,7 +5,7 @@ from itertools import islice
 from abc import ABC, ABCMeta, abstractmethod
 
 import torch
-import torch.utils.data as data
+from torch.utils.data import IterableDataset
 from transformers import RobertaTokenizer
 
 
@@ -22,15 +22,15 @@ class DatasetRegistry(ABCMeta):
         return mcs.registry[task]
 
 
-class BaseDataset(ABC, data.IterableDataset, metaclass=DatasetRegistry):
+class BaseDataset(ABC, IterableDataset, metaclass=DatasetRegistry):
     task = None
-    tokenizer = RobertaTokenizer('vocabs/roberta-large-vocab.json', 'vocabs/roberta-large-merges.txt')
-    gap_token_id = tokenizer.convert_tokens_to_ids(['<gap>'])[0]
+    tokenizer = RobertaTokenizer(vocab_file='vocabs/roberta-vocab.json', merges_file='vocabs/roberta-merges.txt')
     pad_token_id = tokenizer.convert_tokens_to_ids(['<pad>'])[0]
+    gap_token_id = tokenizer.convert_tokens_to_ids(['<gap>'])[0]
 
     def __init__(self, data_file, data_size, local_rank, world_size=None):
         if not os.path.isfile(data_file):
-            raise FileNotFoundError(f'{data_file} does not exist or is a directory')
+            raise FileNotFoundError(f'{data_file} does not exist or is a directory.')
 
         self.data_file = data_file
         self.size = data_size

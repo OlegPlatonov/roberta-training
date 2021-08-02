@@ -1,38 +1,42 @@
+import random
+import os
+import string
+import re
+import argparse
+
 import numpy as np
 import pandas as pd
 import spacy
-import re
-import os
-import random
-import string
-import argparse
+
+from multiprocessing import Pool
+from functools import partial
 from bs4 import BeautifulSoup
 from unicodedata import normalize
-from functools import partial
-from multiprocessing import Pool
 from transformers import RobertaTokenizer
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--num_workers',
                     type=int,
                     default=4,
-                    help='Number of processes to use for data processing.')
+                    help='Number of processes to use for data preprocessing.')
 parser.add_argument('--data_dir',
                     type=str,
-                    default='./Wikipedia/Extracted')
+                    default='wikipedia/extracted',
+                    help='Directory with data to preprocess.')
 parser.add_argument('--save_dir',
                     type=str,
-                    default='./GT/Text')
+                    default='GT/text',
+                    help='Directory for saving preprocessed data.')
 parser.add_argument('--seed',
                     type=int,
                     default=111,
-                    help='Random seed for reproducibility.')
+                    help='Random seed.')
 args = parser.parse_args()
 
 nlp = spacy.load('en_core_web_sm', disable=['tagger', 'ner'])
 
-tokenizer = RobertaTokenizer('../vocabs/roberta-large-vocab.json',
-                             '../vocabs/roberta-large-merges.txt',
+tokenizer = RobertaTokenizer(vocab_file='../vocabs/roberta-vocab.json', merges_file='../vocabs/roberta-merges.txt',
                              additional_special_tokens=['<gap>'])
 
 GAP_TOKEN = '<gap>'
@@ -77,11 +81,11 @@ def process_raw_text(text):
     text = normalize('NFKD', text)
     text = re.sub('\(.*?\)', '', text, flags=re.DOTALL)
     text = re.sub('\[.*?\]', '', text, flags=re.DOTALL)
-    text = fix_space_and_punctuation(text)
+    text = fix_spaces_and_punctuation(text)
     return text
 
 
-def fix_space_and_punctuation(text):
+def fix_spaces_and_punctuation(text):
     text = re.sub('[\s\s+]', ' ', text)
     text = re.sub('[,;:] [,;:]', ',', text)
     text = re.sub('[,.:] [,.:]', '.', text)
@@ -136,7 +140,7 @@ def process_directory(directory, save_path, text_size, num_gaps, min_space, num_
                      num_gaps=num_gaps, min_space=min_space, num_random_sent=num_random_sent,
                      target_len=target_len, min_len=min_len, max_len=max_len)
 
-    print(f'Finished processing data from {directory}.')
+    print(f'Finished preprocessing data from {directory}.')
 
 
 def process_file(file, directory, save_path, chunk_size, num_gaps, min_space, num_random_sent,

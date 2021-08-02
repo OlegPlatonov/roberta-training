@@ -31,14 +31,14 @@ class BaseEvaluator(ABC, metaclass=EvaluatorRegistry):
         self.world_size = world_size
         self.args = args
 
+    @torch.no_grad()
     def evaluate(self, model, step):
         self.logger.info('Evaluating...')
         loss_meters = defaultdict(AverageMeter)
         metrics = defaultdict(float)
 
         model.eval()
-        with torch.no_grad(), tqdm(total=len(self.data_loader.dataset),
-                                   disable=self.args.local_rank not in [-1, 0]) as progress_bar:
+        with tqdm(total=len(self.data_loader.dataset), disable=self.args.local_rank not in [-1, 0]) as progress_bar:
             for batch in self.data_loader:
                 batch = {name: tensor.to(self.device) for name, tensor in batch.items()}
                 current_batch_size = batch['input_ids'].shape[0]
@@ -67,12 +67,14 @@ class BaseEvaluator(ABC, metaclass=EvaluatorRegistry):
 
         return results
 
+    @staticmethod
     @abstractmethod
-    def update_metrics(self, metrics, batch, outputs):
+    def update_metrics(metrics, batch, outputs):
         pass
 
+    @staticmethod
     @abstractmethod
-    def get_final_metrics(self, metrics, loss_meters):
+    def get_final_metrics(metrics, loss_meters):
         pass
 
 
@@ -80,7 +82,8 @@ class EvaluatorForGT(BaseEvaluator):
     task = 'GT'
     primary_metric = 'Accuracy'
 
-    def update_metrics(self, metrics, batch, outputs):
+    @staticmethod
+    def update_metrics(metrics, batch, outputs):
         gap_logits = outputs[2]
         preds = torch.argmax(gap_logits, dim=1)
         target_gaps = batch['target_gaps']
@@ -89,7 +92,8 @@ class EvaluatorForGT(BaseEvaluator):
         metrics['zero_preds'] += torch.sum(preds == 0).item()
         metrics['total_preds'] += batch['input_ids'].shape[0]
 
-    def get_final_metrics(self, metrics, loss_meters):
+    @staticmethod
+    def get_final_metrics(metrics, loss_meters):
         results = OrderedDict([
             ('Loss', loss_meters['Loss'].avg),
             ('Accuracy', metrics['correct_preds'] / metrics['total_preds']),
@@ -104,7 +108,8 @@ class EvaluatorForQA(BaseEvaluator):
     task = 'QA'
     primary_metric = 'Exact_Match'
 
-    def update_metrics(self, metrics, batch, outputs):
+    @staticmethod
+    def update_metrics(metrics, batch, outputs):
         start_logits, end_logits = outputs[2:4]
         start_preds = torch.argmax(start_logits, dim=1)
         end_preds = torch.argmax(end_logits, dim=1)
@@ -120,7 +125,8 @@ class EvaluatorForQA(BaseEvaluator):
         metrics['zero_preds'] += torch.sum(zero_preds).item()
         metrics['total_preds'] += batch['input_ids'].shape[0]
 
-    def get_final_metrics(self, metrics, loss_meters):
+    @staticmethod
+    def get_final_metrics(metrics, loss_meters):
         results = OrderedDict([
             ('Start_Loss', loss_meters['Start_Loss'].avg),
             ('End_Loss', loss_meters['End_Loss'].avg),

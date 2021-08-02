@@ -8,9 +8,7 @@ import torch
 
 
 def get_logger(log_dir, name, verbose=True, log_file='log.txt'):
-    """
-    Adapted from https://github.com/chrischute/squad.
-    """
+    """Adapted from https://github.com/chrischute/squad."""
     class StreamHandlerWithTQDM(logging.Handler):
         """
         Let `logging` print without breaking `tqdm` progress bars.
@@ -68,9 +66,7 @@ def get_logger(log_dir, name, verbose=True, log_file='log.txt'):
 
 
 class CheckpointSaver:
-    """
-    Adapted from https://github.com/chrischute/squad.
-    """
+    """Adapted from https://github.com/chrischute/squad."""
     def __init__(self, save_dir, max_checkpoints, primary_metric,
                  maximize_metric=True, logger=None):
         super(CheckpointSaver, self).__init__()
@@ -152,9 +148,7 @@ class CheckpointSaver:
 
 
 class AverageMeter:
-    """
-    Taken from https://github.com/chrischute/squad.
-    """
+    """Taken from https://github.com/chrischute/squad."""
     def __init__(self):
         self.avg = 0
         self.sum = 0
@@ -169,22 +163,20 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def get_save_dir(base_dir, name, subdir='train', id_max=100, use_existing_dir=False):
-    """
-    Adapted from https://github.com/chrischute/squad.
-    """
-    for uid in range(1, id_max):
-        save_dir = os.path.join(base_dir, subdir, f'{name}_{uid:02d}')
+def get_save_dir(base_dir, name, subdir='train', max_idx=100, use_existing_dir=False):
+    """Adapted from https://github.com/chrischute/squad."""
+    for idx in range(1, max_idx):
+        save_dir = os.path.join(base_dir, subdir, f'{name}_{idx:02d}')
         if not os.path.exists(save_dir):
             if not use_existing_dir:
                 os.makedirs(save_dir)
                 return save_dir
             else:
-                save_dir = os.path.join(base_dir, subdir, f'{name}_{uid - 1:02d}')
+                save_dir = os.path.join(base_dir, subdir, f'{name}_{idx - 1:02d}')
                 return save_dir
 
-    raise RuntimeError('Too many save directories created with the same name. \
-                       Delete old save directories or use another name.')
+    raise RuntimeError('Too many save directories created with the same name. '
+                       'Delete old save directories or use another name.')
 
 
 def get_data_sizes(data_dir, num_epochs, logger=None):
@@ -211,3 +203,19 @@ def get_data_sizes(data_dir, num_epochs, logger=None):
         logger.info(f'Number of samples per epoch: {num_train_samples_per_epoch}')
 
     return num_train_samples_per_epoch, num_dev_samples, num_unique_train_epochs
+
+
+def get_parameter_groups(model):
+    no_decay = ['bias', 'LayerNorm.weight']
+
+    parameter_groups = [
+        {
+            'params': [param for name, param in model.named_parameters() if not any(nd in name for nd in no_decay)]
+        },
+        {
+            'params': [param for name, param in model.named_parameters() if any(nd in name for nd in no_decay)],
+            'weight_decay': 0
+        }
+    ]
+
+    return parameter_groups

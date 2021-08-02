@@ -24,34 +24,23 @@ class ModelRegistry(ABCMeta):
 
 class BaseModel(ABC, BertPreTrainedModel, metaclass=ModelRegistry):
     task = None
-
-
-class RobertaForGT(BaseModel):
     config_class = RobertaConfig
     pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
     base_model_prefix = 'roberta'
+
+
+class RobertaForGT(BaseModel):
     task = 'GT'
 
     def __init__(self, config):
-        super(RobertaForGT, self).__init__(config)
+        super().__init__(config)
         self.roberta = RobertaModel(config)
         self.gap_outputs = nn.Linear(config.hidden_size, 1)
 
         self.init_weights()
 
-    def forward(
-        self,
-        input_ids,
-        attention_mask,
-        gap_ids,
-        target_gaps=None,
-    ):
-
-        outputs = self.roberta(
-            input_ids,
-            attention_mask=attention_mask
-        )
-
+    def forward(self, input_ids, attention_mask, gap_ids, target_gaps=None):
+        outputs = self.roberta(input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]
 
         batch_size, seq_len, _ = sequence_output.shape
@@ -74,35 +63,20 @@ class RobertaForGT(BaseModel):
 
 
 class RobertaForQA(BaseModel):
-    config_class = RobertaConfig
-    pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
-    base_model_prefix = 'roberta'
     task = 'QA'
 
     def __init__(self, config):
-        super(RobertaForQA, self).__init__(config)
+        super().__init__(config)
         self.roberta = RobertaModel(config)
         self.qa_outputs = nn.Linear(config.hidden_size, 2)
 
         self.init_weights()
 
-    def forward(
-        self,
-        input_ids,
-        attention_mask,
-        answer_start=None,
-        answer_end=None
-    ):
-
-        outputs = self.roberta(
-            input_ids,
-            attention_mask=attention_mask
-        )
-
+    def forward(self, input_ids, attention_mask, answer_start=None, answer_end=None):
+        outputs = self.roberta(input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]
 
         answer_logits = self.qa_outputs(sequence_output)
-
         start_logits, end_logits = answer_logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
